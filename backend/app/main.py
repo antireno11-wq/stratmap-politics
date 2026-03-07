@@ -8,8 +8,15 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 
-from .db import db_health, get_deputy_profile, init_db, list_ranking, recalculate_scores, upsert_deputy_snapshots
-from .ingest import ingest_from_chamber
+from .db import (
+    count_by_camara,
+    db_health,
+    get_parliamentarian,
+    init_db,
+    list_parliamentarians,
+    upsert_parliamentarians,
+)
+from .ingest import ingest_all_parliamentarians, ingest_deputies_from_chamber, ingest_senators_from_senate
 from .models import IngestPayload
 
 
@@ -29,11 +36,10 @@ async def _auto_ingest_loop() -> None:
     global last_auto_ingest_at, last_auto_ingest_result
 
     interval_minutes = int(os.getenv("AUTO_INGEST_INTERVAL_MINUTES", "360"))
-    session_limit = int(os.getenv("AUTO_INGEST_SESSION_LIMIT", "80"))
 
     while True:
         try:
-            result = await asyncio.to_thread(ingest_from_chamber, None, session_limit)
+            result = await asyncio.to_thread(ingest_all_parliamentarians)
             last_auto_ingest_at = datetime.now(timezone.utc).isoformat()
             last_auto_ingest_result = result
             print(f"[auto-ingest] completed at {last_auto_ingest_at}: {result}")
@@ -65,7 +71,7 @@ async def lifespan(_: FastAPI):
                 pass
 
 
-app = FastAPI(title="Stratmap Politics API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Stratmap Politics API", version="0.3.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -83,47 +89,102 @@ def ingest_status() -> dict:
     }
 
 
-@app.post("/api/v1/ingest/chamber")
-def ingest_chamber(
-    year: Optional[int] = Query(default=None, ge=2010, le=2100),
-    session_limit: int = Query(default=80, ge=1, le=500),
-) -> dict:
+@app.post("/api/v1/ingest/chamber/deputies")
+def ingest_chamber_deputies() -> dict:
     try:
-        result = ingest_from_chamber(year=year, session_limit=session_limit)
-        return {"ok": True, **result}
+        result = ingest_deputies_from_chamber()
+        return {"ok": True, "source": "camara", "camara": "DIPUTADO", **result}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error de ingesta Camara: {exc}")
 
 
-@app.post("/api/v1/ingest/deputies")
-def ingest_deputies(payload: IngestPayload) -> dict:
+@app.post("/api/v1/ingest/senate/senators")
+def ingest_senate_senators() -> dict:
+    try:
+        result = ingest_senators_from_senate()
+        return {"ok": True, "source": "senado", "camara": "SENADOR", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error de ingesta Senado: {exc}")
+
+
+@app.post("/api/v1/ingest/all")
+def ingest_all() -> dict:
+    try:
+        result = ingest_all_parliamentarians()
+        return {"ok": True, **result}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error de ingesta: {exc}")
+
+
+@app.post("/api/v1/ingest/parliamentarians")
+def ingest_manual(payload: IngestPayload) -> dict:
     if not payload.items:
         raise HTTPException(status_code=400, detail="No hay items para ingerir")
-    inserted = upsert_deputy_snapshots([i.model_dump() for i in payload.items])
-    return {"ok": True, "processed": inserted}
+    processed = upsert_parliamentarians(payload.camara, [i.model_dump() for i in payload.items], source="manual")
+    return {"ok": True, "processed": processed, "camara": payload.camara}
 
 
-@app.post("/api/v1/scores/recalculate")
-def recalc_scores() -> dict:
-    updated = recalculate_scores()
-    return {"ok": True, "updated": updated}
-
-
-@app.get("/api/v1/ranking")
-def ranking(
+@app.get("/api/v1/parliamentarians")
+def parliamentarians(
+    camara: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
     partido: Optional[str] = Query(default=None),
     region: Optional[str] = Query(default=None),
-    comision: Optional[str] = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=200, ge=1, le=1000),
 ) -> dict:
-    rows = list_ranking(q=q, partido=partido, region=region, comision=comision, limit=limit)
-    return {"items": rows, "count": len(rows)}
+    rows = list_parliamentarians(camara=camara, q=q, partido=partido, region=region, limit=limit)
+    counters = count_by_camara()
+    return {"items": rows, "count": len(rows), "counters": counters}
+
+
+@app.get("/api/v1/parliamentarians/{person_id}")
+def parliamentarian_profile(person_id: int) -> dict:
+    profile = get_parliamentarian(person_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Parlamentario no encontrado")
+    return {"parlamentario": profile}
+
+
+# Compatibilidad temporal con rutas antiguas.
+@app.get("/api/v1/ranking")
+def ranking_legacy(
+    q: Optional[str] = Query(default=None),
+    partido: Optional[str] = Query(default=None),
+    region: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+) -> dict:
+    rows = list_parliamentarians(camara="DIPUTADO", q=q, partido=partido, region=region, limit=limit)
+    legacy = [
+        {
+            "id": r["id"],
+            "external_id": r["external_id"],
+            "nombre": r["nombre"],
+            "partido": r["partido"],
+            "distrito": r["distrito_circunscripcion"],
+            "region": r["region"],
+            "score": 0,
+            "asistencia_pct": 0,
+            "proyectos_presentados": 0,
+            "camara": r["camara"],
+        }
+        for r in rows
+    ]
+    return {"items": legacy, "count": len(legacy)}
 
 
 @app.get("/api/v1/deputies/{deputy_id}")
-def deputy_profile(deputy_id: int) -> dict:
-    profile = get_deputy_profile(deputy_id)
+def deputy_profile_legacy(deputy_id: int) -> dict:
+    profile = get_parliamentarian(deputy_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Diputado no encontrado")
-    return profile
+    return {
+        "diputado": {
+            "id": profile["id"],
+            "nombre": profile["nombre"],
+            "partido": profile["partido"],
+            "distrito": profile["distrito_circunscripcion"],
+            "periodo": profile["periodo"],
+        },
+        "score": None,
+        "comisiones": [],
+    }
