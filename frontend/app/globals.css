@@ -1,0 +1,99 @@
+:root {
+  --bg: #f3efe6;
+  --ink: #1e1f1d;
+  --card: #fffaf0;
+  --line: #d8cfbe;
+  --accent: #0f6f5c;
+  --accent-soft: #d8efe8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at 20% 10%, #fff4cf, transparent 45%), var(--bg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1rem 3rem;
+}
+
+h1 {
+  font-size: clamp(2rem, 4vw, 3rem);
+  margin: 0 0 0.5rem;
+}
+
+.subtitle {
+  margin: 0 0 2rem;
+  color: #4f524c;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.kpis {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 0.7rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.score {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.filter-bar {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 1rem;
+}
+
+input {
+  width: 100%;
+  padding: 0.65rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+@media (max-width: 640px) {
+  main {
+    padding-top: 1.2rem;
+  }
+}

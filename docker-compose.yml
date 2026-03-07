@@ -1,0 +1,40 @@
+version: '3.9'
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: stratmap
+      POSTGRES_USER: stratmap
+      POSTGRES_PASSWORD: stratmap
+    ports:
+      - '5432:5432'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql://stratmap:stratmap@db:5432/stratmap
+      AUTO_INGEST_ENABLED: "true"
+      AUTO_INGEST_INTERVAL_MINUTES: "360"
+      AUTO_INGEST_SESSION_LIMIT: "80"
+    ports:
+      - '8000:8000'
+    depends_on:
+      - db
+
+  frontend:
+    image: node:20
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    volumes:
+      - ./frontend:/app
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - '3000:3000'
+    depends_on:
+      - backend
+
+volumes:
+  pg_data:
