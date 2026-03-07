@@ -245,6 +245,16 @@ def upsert_deputy_snapshots(items: List[Dict[str, Any]]) -> int:
     return total
 
 
+def purge_invalid_deputies() -> int:
+    sql = "DELETE FROM diputados WHERE external_id !~ '^[0-9]+$' RETURNING id;"
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+        conn.commit()
+    return len(rows)
+
+
 def _latest_metrics(diputado_id: int) -> Dict[str, float]:
     sql = """
     SELECT

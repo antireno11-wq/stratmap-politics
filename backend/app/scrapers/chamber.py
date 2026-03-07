@@ -42,10 +42,15 @@ def _records_from_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
     root = ET.fromstring(xml_bytes)
     records: List[Dict[str, str]] = []
     for node in root.iter():
-        if len(list(node)) == 0:
+        children = list(node)
+        if len(children) == 0:
+            continue
+        # Solo tratamos como "row" nodos cuyos hijos son hojas (valor directo).
+        if any(len(list(child)) > 0 for child in children):
             continue
         row = _flatten_record(node)
-        if row:
+        non_empty = sum(1 for v in row.values() if v)
+        if row and non_empty >= 2:
             records.append(row)
     return records
 
@@ -64,6 +69,29 @@ def _to_int(value: Optional[str], fallback: int = 0) -> int:
         return fallback
 
 
+def _normalize_external_id(value: Optional[str]) -> Optional[str]:
+    raw = (value or "").strip()
+    digits = re.sub(r"[^0-9]", "", raw)
+    if not digits:
+        return None
+    return str(int(digits))
+
+
+def _looks_like_party_label(nombre: str) -> bool:
+    t = _normalize_text(nombre)
+    patterns = [
+        "partido",
+        "federacion",
+        "independiente",
+        "frente",
+        "comite",
+        "democrata",
+        "social",
+        "republicano",
+    ]
+    return any(p in t for p in patterns)
+
+
 def _request_xml(path: str, params: Optional[Dict[str, Any]] = None) -> bytes:
     url = f"{BASE_URL}/{path.lstrip('/')}"
     response = requests.get(url, params=params, timeout=45)
@@ -77,13 +105,42 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     deputies: List[Dict[str, str]] = []
 
     for row in records:
-        external_id = _first_present(row, ["dipid", "dip_id", "iddiputado", "diputadoid", "id"])
-        nombre = _first_present(row, ["nombre", "dipnombre", "nombreparlamentario", "dip_nom", "parlamentario"])
-        partido = _first_present(row, ["partido", "militancia", "partidonombre", "pactopolitico"])
-        distrito = _first_present(row, ["distrito", "distritonombre", "nrodistrito", "regiondistrito"])
-        region = _first_present(row, ["region", "regionnombre"]) or distrito
+        external_id = _normalize_external_id(
+            _first_present(
+                row,
+                [
+                    "dipid",
+                    "dip_id",
+                    "iddiputado",
+                    "diputadoid",
+                    "idparlamentario",
+                    "iddiputado",
+                    "id",
+                ],
+            )
+        )
+        nombre = _first_present(
+            row,
+            [
+                "nombre",
+                "dipnombre",
+                "nombreparlamentario",
+                "dip_nom",
+                "parlamentario",
+                "nombres",
+            ],
+        )
+        partido = _first_present(
+            row,
+            ["partido", "militancia", "partidonombre", "pactopolitico", "siglapartido", "bancada"],
+        )
+        distrito = _first_present(
+            row,
+            ["distrito", "distritonombre", "nrodistrito", "regiondistrito", "distritoelectoral"],
+        )
+        region = _first_present(row, ["region", "regionnombre", "nomregion"]) or distrito
 
-        if not external_id or not nombre:
+        if not external_id or not nombre or _looks_like_party_label(nombre):
             continue
 
         deputies.append(
@@ -106,7 +163,12 @@ def fetch_comisiones_vigentes() -> Dict[str, List[str]]:
 
     by_deputy: Dict[str, List[str]] = defaultdict(list)
     for row in records:
-        external_id = _first_present(row, ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario"])
+        external_id = _normalize_external_id(
+            _first_present(
+                row,
+                ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "iddiputado", "id"],
+            )
+        )
         comision = _first_present(row, ["comision", "comisionnombre", "nombrecomision", "descripcion"])
         if external_id and comision and comision not in by_deputy[external_id]:
             by_deputy[external_id].append(comision)
@@ -147,7 +209,12 @@ def fetch_attendance_by_deputy(year: int, session_limit: int = 80) -> Dict[str, 
         attendance_records = _records_from_xml(xml)
 
         for row in attendance_records:
-            external_id = _first_present(row, ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario"])
+            external_id = _normalize_external_id(
+                _first_present(
+                    row,
+                    ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "iddiputado", "id"],
+                )
+            )
             status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
             if not external_id:
                 continue
