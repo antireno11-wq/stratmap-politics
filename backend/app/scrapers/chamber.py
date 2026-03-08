@@ -68,6 +68,44 @@ def _first_present(row: Dict[str, str], candidates: List[str]) -> Optional[str]:
     return None
 
 
+def _value_by_key_tokens(row: Dict[str, str], include_tokens: List[str], exclude_tokens: Optional[List[str]] = None) -> Optional[str]:
+    exclude_tokens = exclude_tokens or []
+    for key, value in row.items():
+        if not value:
+            continue
+        k = key.lower()
+        if all(tok in k for tok in include_tokens) and not any(tok in k for tok in exclude_tokens):
+            return value
+    return None
+
+
+def _compose_full_name(row: Dict[str, str]) -> Optional[str]:
+    direct = _first_present(
+        row,
+        [
+            "nombreparlamentario",
+            "dipnombrecompleto",
+            "nombrecompleto",
+            "dip_nom_completo",
+            "parlamentario",
+        ],
+    )
+    if direct and len(direct.split()) >= 2:
+        return direct
+
+    nombres = _first_present(row, ["nombres", "nombre", "dipnombre", "dip_nom"]) or ""
+    ap_pat = _first_present(row, ["apellidopaterno", "appaterno", "apellido_paterno", "paterno"]) or ""
+    ap_mat = _first_present(row, ["apellidomaterno", "apmaterno", "apellido_materno", "materno"]) or ""
+
+    parts = [p.strip() for p in [nombres, ap_pat, ap_mat] if p and p.strip()]
+    if len(parts) >= 2:
+        return " ".join(parts)
+
+    if nombres:
+        return nombres
+    return None
+
+
 def _looks_like_party_label(nombre: str) -> bool:
     t = _normalize_text(nombre)
     patterns = [
@@ -122,19 +160,22 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
                 ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "id"],
             )
         )
-        nombre = _first_present(
-            row,
-            ["nombre", "dipnombre", "nombreparlamentario", "dip_nom", "parlamentario", "nombres"],
+        nombre = _compose_full_name(row)
+        partido = (
+            _first_present(row, ["partido", "militancia", "partidonombre", "pactopolitico", "siglapartido", "bancada"])
+            or _value_by_key_tokens(row, ["partido"])
+            or _value_by_key_tokens(row, ["bancada"])
         )
-        partido = _first_present(
-            row,
-            ["partido", "militancia", "partidonombre", "pactopolitico", "siglapartido", "bancada"],
+        distrito = (
+            _first_present(row, ["distrito", "distritonombre", "nrodistrito", "regiondistrito", "distritoelectoral"])
+            or _value_by_key_tokens(row, ["distrito"])
+            or _value_by_key_tokens(row, ["circunscripcion"])
         )
-        distrito = _first_present(
-            row,
-            ["distrito", "distritonombre", "nrodistrito", "regiondistrito", "distritoelectoral"],
+        region = (
+            _first_present(row, ["region", "regionnombre", "nomregion"])
+            or _value_by_key_tokens(row, ["region"], exclude_tokens=["distrito"])
+            or distrito
         )
-        region = _first_present(row, ["region", "regionnombre", "nomregion"]) or distrito
 
         if not external_id or not nombre or _looks_like_party_label(nombre):
             continue
@@ -154,7 +195,9 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     return list(dedup.values())
 
 
-def fetch_attendance_by_deputy(year: int, session_limit: int = 80) -> Dict[str, Dict[str, int]]:
+def fetch_attendance_by_deputy(
+    year: int, session_limit: int = 80
+) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
     sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
     session_records = _records_from_xml(sessions_xml)
 
@@ -167,7 +210,8 @@ def fetch_attendance_by_deputy(year: int, session_limit: int = 80) -> Dict[str, 
     session_ids = [sid for sid in session_ids if sid > 0]
     session_ids = sorted(set(session_ids), reverse=True)[: max(1, session_limit)]
 
-    stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
+    stats_by_id: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
+    stats_by_name: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
 
     for sid in session_ids:
         xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
@@ -180,27 +224,45 @@ def fetch_attendance_by_deputy(year: int, session_limit: int = 80) -> Dict[str, 
                     ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "id"],
                 )
             )
+            nombre = _compose_full_name(row) or _first_present(
+                row, ["nombre", "dipnombre", "nombreparlamentario", "parlamentario", "nombres"]
+            )
+            nombre_norm = _normalize_text(nombre)
             status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
-            if not external_id:
+            if not external_id and not nombre_norm:
                 continue
 
-            stats[external_id]["total"] += 1
-            if _attendance_status_is_absent(status):
-                stats[external_id]["absent"] += 1
-            else:
-                stats[external_id]["present"] += 1
+            targets: List[Dict[str, Dict[str, int]]] = []
+            target_keys: List[str] = []
+            if external_id:
+                targets.append(stats_by_id)
+                target_keys.append(external_id)
+            if nombre_norm:
+                targets.append(stats_by_name)
+                target_keys.append(nombre_norm)
 
-    return stats
+            for t, k in zip(targets, target_keys):
+                t[k]["total"] += 1
+                if _attendance_status_is_absent(status):
+                    t[k]["absent"] += 1
+                else:
+                    t[k]["present"] += 1
+
+    return dict(stats_by_id), dict(stats_by_name)
 
 
 def build_deputy_profiles() -> List[Dict[str, Any]]:
     year = datetime.now().year
     deputies = fetch_deputies_periodo_actual()
-    attendance_map = fetch_attendance_by_deputy(year=year, session_limit=80)
+    attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(year=year, session_limit=80)
 
     out: List[Dict[str, Any]] = []
     for deputy in deputies:
-        stats = attendance_map.get(deputy["external_id"], {"present": 0, "absent": 0, "total": 0})
+        deputy_name_norm = _normalize_text(deputy["nombre"])
+        stats = attendance_by_id.get(
+            deputy["external_id"],
+            attendance_by_name.get(deputy_name_norm, {"present": 0, "absent": 0, "total": 0}),
+        )
         total = stats["total"]
         absent = stats["absent"]
         pct = None if total == 0 else round((stats["present"] / total) * 100, 2)
@@ -211,6 +273,7 @@ def build_deputy_profiles() -> List[Dict[str, Any]]:
                 "asistencia_pct": pct,
                 "sesiones_totales": total if total > 0 else None,
                 "sesiones_ausentes": absent if total > 0 else None,
+                "nombre_normalizado": _normalize_text(deputy["nombre"]),
             }
         )
     return out
