@@ -105,6 +105,10 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       updated_at = NOW();
     """
 
+    if not items:
+        # Protección: nunca vaciar una cámara por un scrape vacío/fallido.
+        return 0
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM parlamentarios WHERE camara = %(camara)s", {"camara": clean_camara})

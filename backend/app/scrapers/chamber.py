@@ -94,8 +94,18 @@ def _compose_full_name(row: Dict[str, str]) -> Optional[str]:
         return direct
 
     nombres = _first_present(row, ["nombres", "nombre", "dipnombre", "dip_nom"]) or ""
-    ap_pat = _first_present(row, ["apellidopaterno", "appaterno", "apellido_paterno", "paterno"]) or ""
-    ap_mat = _first_present(row, ["apellidomaterno", "apmaterno", "apellido_materno", "materno"]) or ""
+    ap_pat = (
+        _first_present(row, ["apellidopaterno", "appaterno", "apellido_paterno", "paterno"])
+        or _value_by_key_tokens(row, ["apellido", "paterno"])
+        or _value_by_key_tokens(row, ["apellidopaterno"])
+        or ""
+    )
+    ap_mat = (
+        _first_present(row, ["apellidomaterno", "apmaterno", "apellido_materno", "materno"])
+        or _value_by_key_tokens(row, ["apellido", "materno"])
+        or _value_by_key_tokens(row, ["apellidomaterno"])
+        or ""
+    )
 
     parts = [p.strip() for p in [nombres, ap_pat, ap_mat] if p and p.strip()]
     if len(parts) >= 2:

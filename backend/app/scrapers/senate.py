@@ -132,8 +132,20 @@ def fetch_senators() -> List[Dict[str, str]]:
             }
         )
 
-    dedup = {}
+    def _is_missing(v: str) -> bool:
+        return (v or "").strip() in {"", "Sin dato"}
+
+    dedup: Dict[str, Dict[str, str]] = {}
     for item in out:
-        dedup[item["external_id"]] = item
+        key = item["external_id"]
+        if key not in dedup:
+            dedup[key] = item
+            continue
+        current = dedup[key]
+        # Conserva la versión más rica campo a campo.
+        for field in ["nombre", "partido", "distrito_circunscripcion", "region", "periodo"]:
+            if _is_missing(current.get(field, "")) and not _is_missing(item.get(field, "")):
+                current[field] = item[field]
+        dedup[key] = current
 
     return list(dedup.values())
