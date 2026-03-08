@@ -240,7 +240,7 @@ def _normalize_attendance_state(status: str) -> str:
     return "presente"
 
 
-def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
+def fetch_deputies_periodo_actual(enrich_profile_page: bool = False) -> List[Dict[str, str]]:
     xml = _request_xml("WSDiputado.asmx/retornarDiputadosPeriodoActual")
     root = ET.fromstring(xml)
     deputies: List[Dict[str, str]] = []
@@ -297,7 +297,7 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     for d in out:
         needs_geo = _is_missing(d.get("distrito_circunscripcion")) or _is_missing(d.get("region"))
         api_extra = fetch_deputy_detail(d["external_id"]) if (needs_geo or _is_missing(d.get("partido"))) else None
-        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"])
+        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"]) if enrich_profile_page else None
 
         if api_extra:
             if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(api_extra.get("distrito_circunscripcion")):
@@ -583,10 +583,10 @@ def inspect_attendance_source(year: int, session_limit: int = 10, sample_limit: 
     }
 
 
-def build_deputy_profiles() -> List[Dict[str, Any]]:
+def build_deputy_profiles(enrich_profile_page: bool = False) -> List[Dict[str, Any]]:
     current_year = datetime.now().year
     from_year = int(os.getenv("CHAMBER_ATTENDANCE_FROM_YEAR", "2022"))
-    deputies = fetch_deputies_periodo_actual()
+    deputies = fetch_deputies_periodo_actual(enrich_profile_page=enrich_profile_page)
     attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(
         from_year=from_year,
         to_year=current_year,

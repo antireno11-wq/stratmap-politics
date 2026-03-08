@@ -97,10 +97,16 @@ def ingest_status() -> dict:
 
 
 @app.post("/api/v1/ingest/chamber/deputies")
-def ingest_chamber_deputies() -> dict:
+def ingest_chamber_deputies(enrich_profile_page: bool = Query(default=False)) -> dict:
     try:
-        result = ingest_deputies_from_chamber()
-        return {"ok": True, "source": "camara", "camara": "DIPUTADO", **result}
+        result = ingest_deputies_from_chamber(enrich_profile_page=enrich_profile_page)
+        return {
+            "ok": True,
+            "source": "camara",
+            "camara": "DIPUTADO",
+            "enrich_profile_page": enrich_profile_page,
+            **result,
+        }
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error de ingesta Camara: {exc}")
 

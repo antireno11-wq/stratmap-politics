@@ -7,8 +7,8 @@ from .scrapers.chamber import build_deputy_profiles, scrape_attendance_rows
 from .scrapers.senate import fetch_senators
 
 
-def ingest_deputies_from_chamber() -> Dict[str, int]:
-    items = build_deputy_profiles()
+def ingest_deputies_from_chamber(enrich_profile_page: bool = False) -> Dict[str, int]:
+    items = build_deputy_profiles(enrich_profile_page=enrich_profile_page)
     summary = quality_summary(items)
     # Gate de calidad para no sobreescribir con datos vacíos.
     if summary["total"] > 0:
