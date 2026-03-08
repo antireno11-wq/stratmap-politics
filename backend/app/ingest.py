@@ -42,8 +42,8 @@ def ingest_all_parliamentarians() -> Dict[str, int]:
     }
 
 
-def ingest_attendance_sala(year: int, session_limit: int = 80) -> Dict[str, int]:
-    rows = scrape_attendance_rows(year=year, session_limit=session_limit)
+def ingest_attendance_sala(from_year: int, to_year: int, session_limit_per_year: int = 300) -> Dict[str, int]:
+    rows = scrape_attendance_rows(from_year=from_year, to_year=to_year, session_limit_per_year=session_limit_per_year)
     stored = replace_asistencia_sala(rows, source="camara.opendata")
     return {"sessions_processed": len({r["session_id"] for r in rows}), "rows_processed": stored}
 

@@ -187,6 +187,11 @@ def _text(node: Optional[ET.Element]) -> str:
     return (node.text or "").strip()
 
 
+def _is_missing(value: Optional[str]) -> bool:
+    v = (value or "").strip().lower()
+    return v in {"", "sin dato", "none", "null"}
+
+
 def _to_int(value: Optional[str], fallback: int = 0) -> int:
     try:
         return int(float((value or "").replace(",", ".")))
@@ -283,7 +288,54 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
         )
 
     dedup: Dict[str, Dict[str, str]] = {d["external_id"]: d for d in deputies}
-    return list(dedup.values())
+    out = list(dedup.values())
+    for d in out:
+        if _is_missing(d.get("distrito_circunscripcion")) or _is_missing(d.get("region")):
+            extra = fetch_deputy_detail(d["external_id"])
+            if extra:
+                if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(extra.get("distrito_circunscripcion")):
+                    d["distrito_circunscripcion"] = extra["distrito_circunscripcion"]
+                if _is_missing(d.get("region")) and not _is_missing(extra.get("region")):
+                    d["region"] = extra["region"]
+                if _is_missing(d.get("partido")) and not _is_missing(extra.get("partido")):
+                    d["partido"] = extra["partido"]
+    return out
+
+
+def fetch_deputy_detail(external_id: str) -> Optional[Dict[str, str]]:
+    try:
+        xml = _request_xml("WSDiputado.asmx/retornarDiputado", params={"prmDipId": external_id})
+        root = ET.fromstring(xml)
+    except Exception:
+        return None
+
+    distrito = "Sin dato"
+    partido = "Sin dato"
+    region = "Sin dato"
+
+    distrito_node = _find_first(root, "Distrito")
+    distrito_num = _text(_find_first(distrito_node, "Numero")) if distrito_node is not None else ""
+    if distrito_num:
+        distrito = f"Distrito {distrito_num}"
+
+    comunas = _find_all(distrito_node, "Comuna") if distrito_node is not None else []
+    if comunas:
+        region_cand = _text(_find_first(comunas[0], "Region"))
+        if region_cand:
+            region = region_cand
+
+    for m in _find_all(root, "Militancia"):
+        partido_nombre = _text(_find_first(m, "Nombre"))
+        partido_alias = _text(_find_first(m, "Alias"))
+        cand = partido_nombre or partido_alias
+        if cand:
+            partido = cand
+
+    return {
+        "distrito_circunscripcion": distrito,
+        "region": region,
+        "partido": partido,
+    }
 
 
 def inspect_deputies_source(sample_limit: int = 5) -> Dict[str, Any]:
@@ -333,19 +385,13 @@ def inspect_deputy_period_structure(sample_limit: int = 3) -> Dict[str, Any]:
 
 
 def fetch_attendance_by_deputy(
-    year: int, session_limit: int = 80
+    from_year: int, to_year: int, session_limit_per_year: int = 300
 ) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
-    sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
-    session_records = _records_from_xml(sessions_xml)
-
-    session_ids: List[int] = []
-    for row in session_records:
-        sid = _first_present(row, ["sesid", "ses_id", "idsesion", "sesionid", "id"])
-        if sid:
-            session_ids.append(_to_int(sid, -1))
-
-    session_ids = [sid for sid in session_ids if sid > 0]
-    session_ids = sorted(set(session_ids), reverse=True)[: max(1, session_limit)]
+    all_sessions: List[int] = []
+    for year in range(from_year, to_year + 1):
+        sessions = fetch_sessions(year=year, limit=session_limit_per_year)
+        all_sessions.extend([s["session_id"] for s in sessions])
+    session_ids = sorted(set(all_sessions), reverse=True)
 
     stats_by_id: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
     stats_by_name: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
@@ -388,7 +434,7 @@ def fetch_attendance_by_deputy(
     return dict(stats_by_id), dict(stats_by_name)
 
 
-def fetch_sessions(year: int, limit: int = 80) -> List[Dict[str, Any]]:
+def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
     sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
     session_records = _records_from_xml(sessions_xml)
 
@@ -405,8 +451,11 @@ def fetch_sessions(year: int, limit: int = 80) -> List[Dict[str, Any]]:
     return ordered[: max(1, limit)]
 
 
-def scrape_attendance_rows(year: int, session_limit: int = 80) -> List[Dict[str, Any]]:
-    sessions = fetch_sessions(year=year, limit=session_limit)
+def scrape_attendance_rows(from_year: int, to_year: int, session_limit_per_year: int = 300) -> List[Dict[str, Any]]:
+    sessions: List[Dict[str, Any]] = []
+    for year in range(from_year, to_year + 1):
+        sessions.extend(fetch_sessions(year=year, limit=session_limit_per_year))
+    sessions = sorted({s["session_id"]: s for s in sessions}.values(), key=lambda x: x["session_id"], reverse=True)
     out: List[Dict[str, Any]] = []
 
     for session in sessions:
@@ -455,9 +504,14 @@ def inspect_attendance_source(year: int, session_limit: int = 10, sample_limit: 
 
 
 def build_deputy_profiles() -> List[Dict[str, Any]]:
-    year = datetime.now().year
+    current_year = datetime.now().year
+    from_year = int(os.getenv("CHAMBER_ATTENDANCE_FROM_YEAR", "2022"))
     deputies = fetch_deputies_periodo_actual()
-    attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(year=year, session_limit=80)
+    attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(
+        from_year=from_year,
+        to_year=current_year,
+        session_limit_per_year=300,
+    )
 
     out: List[Dict[str, Any]] = []
     for deputy in deputies:

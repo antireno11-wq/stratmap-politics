@@ -145,13 +145,24 @@ def ingest_senate_senators() -> dict:
 
 @app.post("/api/v1/ingest/chamber/attendance")
 def ingest_chamber_attendance(
-    year: Optional[int] = Query(default=None, ge=2010, le=2100),
-    session_limit: int = Query(default=80, ge=1, le=500),
+    from_year: int = Query(default=2022, ge=2010, le=2100),
+    to_year: Optional[int] = Query(default=None, ge=2010, le=2100),
+    session_limit_per_year: int = Query(default=300, ge=1, le=1000),
 ) -> dict:
-    target_year = year or datetime.now(timezone.utc).year
+    target_to_year = to_year or datetime.now(timezone.utc).year
     try:
-        result = ingest_attendance_sala(year=target_year, session_limit=session_limit)
-        return {"ok": True, "source": "camara", "year": target_year, **result}
+        result = ingest_attendance_sala(
+            from_year=from_year,
+            to_year=target_to_year,
+            session_limit_per_year=session_limit_per_year,
+        )
+        return {
+            "ok": True,
+            "source": "camara",
+            "from_year": from_year,
+            "to_year": target_to_year,
+            **result,
+        }
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error de ingesta asistencia Camara: {exc}")
 

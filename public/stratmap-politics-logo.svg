@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="Stratmap Politics">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1">
+      <stop offset="0" stop-color="#163a70"/>
+      <stop offset="1" stop-color="#a94f2d"/>
+    </linearGradient>
+  </defs>
+  <rect width="240" height="240" rx="28" fill="#f5f7fb"/>
+  <circle cx="120" cy="70" r="16" fill="url(#g)"/>
+  <rect x="105" y="86" width="30" height="90" rx="8" fill="url(#g)"/>
+  <rect x="78" y="176" width="84" height="16" rx="8" fill="#1f3553"/>
+  <path d="M40 120 L88 90" stroke="#335b86" stroke-width="6"/>
+  <path d="M200 120 L152 90" stroke="#335b86" stroke-width="6"/>
+  <path d="M48 160 H192" stroke="#a15f45" stroke-width="8"/>
+  <text x="120" y="216" text-anchor="middle" font-family="Merriweather, serif" font-size="22" fill="#1c2f4a">STRATMAP</text>
+</svg>
