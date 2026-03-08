@@ -24,7 +24,7 @@ from .ingest import (
     ingest_senators_from_senate,
 )
 from .models import IngestPayload
-from .scrapers.chamber import inspect_deputies_source
+from .scrapers.chamber import inspect_attendance_source, inspect_deputies_source, inspect_deputy_period_structure
 
 
 auto_ingest_task: Optional[asyncio.Task] = None
@@ -111,6 +111,27 @@ def debug_chamber_source(sample_limit: int = Query(default=5, ge=1, le=20)) -> d
         return inspect_deputies_source(sample_limit=sample_limit)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error debug Camara: {exc}")
+
+
+@app.get("/api/v1/debug/chamber/deputy-period")
+def debug_chamber_deputy_period(sample_limit: int = Query(default=3, ge=1, le=10)) -> dict:
+    try:
+        return inspect_deputy_period_structure(sample_limit=sample_limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error debug estructura diputado-periodo: {exc}")
+
+
+@app.get("/api/v1/debug/chamber/attendance")
+def debug_chamber_attendance(
+    year: Optional[int] = Query(default=None, ge=2010, le=2100),
+    session_limit: int = Query(default=10, ge=1, le=100),
+    sample_limit: int = Query(default=10, ge=1, le=30),
+) -> dict:
+    target_year = year or datetime.now(timezone.utc).year
+    try:
+        return inspect_attendance_source(year=target_year, session_limit=session_limit, sample_limit=sample_limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error debug asistencia Camara: {exc}")
 
 
 @app.post("/api/v1/ingest/senate/senators")

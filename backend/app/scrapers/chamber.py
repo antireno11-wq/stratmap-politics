@@ -298,6 +298,40 @@ def inspect_deputies_source(sample_limit: int = 5) -> Dict[str, Any]:
     }
 
 
+def _flatten_leaf_texts(node: ET.Element, prefix: str = "") -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for child in list(node):
+        key = _local_name(child.tag)
+        path = f"{prefix}.{key}" if prefix else key
+        if len(list(child)) == 0:
+            val = (child.text or "").strip()
+            if val:
+                out[path] = val
+        else:
+            out.update(_flatten_leaf_texts(child, path))
+    return out
+
+
+def inspect_deputy_period_structure(sample_limit: int = 3) -> Dict[str, Any]:
+    xml = _request_xml("WSDiputado.asmx/retornarDiputadosPeriodoActual")
+    root = ET.fromstring(xml)
+    period_nodes = _find_all(root, "DiputadoPeriodo")
+    sample_nodes = period_nodes[: max(1, min(sample_limit, 10))]
+
+    samples: List[Dict[str, Any]] = []
+    for n in sample_nodes:
+        flat = _flatten_leaf_texts(n)
+        keys = sorted(flat.keys())
+        samples.append(
+            {
+                "keys": keys,
+                "values": flat,
+            }
+        )
+
+    return {"total_period_nodes": len(period_nodes), "samples": samples}
+
+
 def fetch_attendance_by_deputy(
     year: int, session_limit: int = 80
 ) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
@@ -398,6 +432,26 @@ def scrape_attendance_rows(year: int, session_limit: int = 80) -> List[Dict[str,
             )
 
     return out
+
+
+def inspect_attendance_source(year: int, session_limit: int = 10, sample_limit: int = 10) -> Dict[str, Any]:
+    sessions = fetch_sessions(year=year, limit=session_limit)
+    if not sessions:
+        return {"sessions_count": 0, "sample_keys": [], "sample_rows": []}
+
+    sid = sessions[0]["session_id"]
+    xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
+    records = _records_from_xml(xml)
+    sample_rows = records[: max(1, min(sample_limit, 30))]
+    sample_keys = sorted({k for r in sample_rows for k in r.keys()})
+    statuses = sorted({(r.get("asistencia") or r.get("tipoasistencia") or r.get("estado") or r.get("descripcion") or "").strip() for r in sample_rows if r})
+    return {
+        "sessions_count": len(sessions),
+        "sample_session_id": sid,
+        "sample_keys": sample_keys,
+        "sample_status_values": [s for s in statuses if s],
+        "sample_rows": sample_rows,
+    }
 
 
 def build_deputy_profiles() -> List[Dict[str, Any]]:
