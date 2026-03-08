@@ -140,6 +140,34 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
     return len(items)
 
 
+def quality_summary(items: List[Dict[str, Any]]) -> Dict[str, int]:
+    total = len(items)
+    with_party = 0
+    with_territory = 0
+    with_region = 0
+    with_attendance = 0
+
+    for it in items:
+        if (it.get("partido") or "Sin dato").strip().lower() != "sin dato":
+            with_party += 1
+        territory = (it.get("distrito_circunscripcion") or it.get("distrito") or "").strip()
+        if territory and territory.lower() != "sin dato":
+            with_territory += 1
+        region = (it.get("region") or "").strip()
+        if region and region.lower() != "sin dato":
+            with_region += 1
+        if it.get("asistencia_pct") is not None:
+            with_attendance += 1
+
+    return {
+        "total": total,
+        "with_party": with_party,
+        "with_territory": with_territory,
+        "with_region": with_region,
+        "with_attendance": with_attendance,
+    }
+
+
 def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: str = "manual") -> int:
     clean_camara = camara.upper().strip()
     if clean_camara not in {"DIPUTADO", "SENADOR"}:

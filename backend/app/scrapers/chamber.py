@@ -241,6 +241,18 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     return list(dedup.values())
 
 
+def inspect_deputies_source(sample_limit: int = 5) -> Dict[str, Any]:
+    xml = _request_xml("WSDiputado.asmx/retornarDiputadosPeriodoActual")
+    records = _records_from_xml(xml)
+    sample_rows = records[: max(1, min(sample_limit, 20))]
+    sample_keys: List[str] = sorted({k for row in sample_rows for k in row.keys()})
+    return {
+        "records_count": len(records),
+        "sample_keys": sample_keys,
+        "sample_rows": sample_rows,
+    }
+
+
 def fetch_attendance_by_deputy(
     year: int, session_limit: int = 80
 ) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:

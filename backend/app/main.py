@@ -18,6 +18,7 @@ from .db import (
 )
 from .ingest import ingest_all_parliamentarians, ingest_deputies_from_chamber, ingest_senators_from_senate
 from .models import IngestPayload
+from .scrapers.chamber import inspect_deputies_source
 
 
 auto_ingest_task: Optional[asyncio.Task] = None
@@ -98,6 +99,14 @@ def ingest_chamber_deputies() -> dict:
         raise HTTPException(status_code=502, detail=f"Error de ingesta Camara: {exc}")
 
 
+@app.get("/api/v1/debug/chamber/source")
+def debug_chamber_source(sample_limit: int = Query(default=5, ge=1, le=20)) -> dict:
+    try:
+        return inspect_deputies_source(sample_limit=sample_limit)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error debug Camara: {exc}")
+
+
 @app.post("/api/v1/ingest/senate/senators")
 def ingest_senate_senators() -> dict:
     try:
@@ -130,11 +139,16 @@ def parliamentarians(
     q: Optional[str] = Query(default=None),
     partido: Optional[str] = Query(default=None),
     region: Optional[str] = Query(default=None),
-    limit: int = Query(default=200, ge=1, le=1000),
+    limit: int = Query(default=1000, ge=1, le=1000),
 ) -> dict:
     rows = list_parliamentarians(camara=camara, q=q, partido=partido, region=region, limit=limit)
     counters = count_by_camara()
-    return {"items": rows, "count": len(rows), "counters": counters}
+    return {
+        "items": rows,
+        "count": len(rows),
+        "total_global": counters.get("DIPUTADO", 0) + counters.get("SENADOR", 0),
+        "counters": counters,
+    }
 
 
 @app.get("/api/v1/parliamentarians/{person_id}")
