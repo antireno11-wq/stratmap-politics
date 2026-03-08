@@ -49,6 +49,13 @@ def _flatten_record(node: ET.Element) -> Dict[str, str]:
 def _records_from_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
     root = ET.fromstring(xml_bytes)
     records: List[Dict[str, str]] = []
+
+    def _looks_like_person_row(row: Dict[str, str]) -> bool:
+        keys = {k.lower() for k in row.keys()}
+        has_id = any("id" in k for k in keys)
+        has_name = any("nombre" in k or "parlament" in k for k in keys)
+        return has_id and has_name
+
     for node in root.iter():
         children = list(node)
         if len(children) == 0:
@@ -58,6 +65,28 @@ def _records_from_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
         row = _flatten_record(node)
         if sum(1 for v in row.values() if v) >= 2:
             records.append(row)
+
+    # Fallback: algunos responses traen nodos con estructura irregular.
+    if records:
+        return records
+
+    for node in root.iter():
+        descendants = list(node.iter())
+        if len(descendants) <= 1:
+            continue
+        row: Dict[str, str] = {}
+        for leaf in descendants:
+            if leaf is node:
+                continue
+            if len(list(leaf)) > 0:
+                continue
+            key = _local_name(leaf.tag).lower()
+            value = (leaf.text or "").strip()
+            if key and value and key not in row:
+                row[key] = value
+        if len(row) >= 2 and _looks_like_person_row(row):
+            records.append(row)
+
     return records
 
 
@@ -169,8 +198,15 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
                 row,
                 ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "id"],
             )
+            or _value_by_key_tokens(
+                row,
+                ["id"],
+                exclude_tokens=["region", "distrito", "partido", "sesion", "votacion", "comision"],
+            )
         )
         nombre = _compose_full_name(row)
+        if not nombre:
+            nombre = _value_by_key_tokens(row, ["nombre"]) or _value_by_key_tokens(row, ["parlament"])
         partido = (
             _first_present(row, ["partido", "militancia", "partidonombre", "pactopolitico", "siglapartido", "bancada"])
             or _value_by_key_tokens(row, ["partido"])
