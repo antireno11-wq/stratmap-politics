@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Dict
 
-from .db import calculate_attendance_pct_by_deputy, quality_summary, replace_asistencia_sala, replace_parliamentarians
+from .db import (
+    calculate_attendance_pct_by_deputy,
+    quality_summary,
+    replace_asistencia_sala,
+    replace_parliamentarians,
+    upsert_parliamentarians,
+)
 from .scrapers.chamber import build_deputy_profiles, scrape_attendance_rows
 from .scrapers.senate import fetch_senators
 
@@ -32,7 +38,12 @@ def ingest_deputies_from_chamber(
                 "with_party": summary["with_party"],
                 "with_territory": summary["with_territory"],
             }
-    processed = replace_parliamentarians(camara="DIPUTADO", items=items, source="camara.opendata")
+    # Si estamos enriqueciendo por lotes, no borrar la tabla completa.
+    is_batch_enrich = enrich_profile_page and enrich_limit > 0
+    if is_batch_enrich or not include_attendance:
+        processed = upsert_parliamentarians(camara="DIPUTADO", items=items, source="camara.opendata")
+    else:
+        processed = replace_parliamentarians(camara="DIPUTADO", items=items, source="camara.opendata")
     return {"processed": processed, **summary}
 
 
