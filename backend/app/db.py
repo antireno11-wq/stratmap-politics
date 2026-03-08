@@ -118,9 +118,9 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       region = EXCLUDED.region,
       periodo = EXCLUDED.periodo,
       source = EXCLUDED.source,
-      asistencia_pct = EXCLUDED.asistencia_pct,
-      sesiones_totales = EXCLUDED.sesiones_totales,
-      sesiones_ausentes = EXCLUDED.sesiones_ausentes,
+      asistencia_pct = COALESCE(EXCLUDED.asistencia_pct, parlamentarios.asistencia_pct),
+      sesiones_totales = COALESCE(EXCLUDED.sesiones_totales, parlamentarios.sesiones_totales),
+      sesiones_ausentes = COALESCE(EXCLUDED.sesiones_ausentes, parlamentarios.sesiones_ausentes),
       updated_at = NOW();
     """
 
@@ -207,9 +207,9 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       region = EXCLUDED.region,
       periodo = EXCLUDED.periodo,
       source = EXCLUDED.source,
-      asistencia_pct = EXCLUDED.asistencia_pct,
-      sesiones_totales = EXCLUDED.sesiones_totales,
-      sesiones_ausentes = EXCLUDED.sesiones_ausentes,
+      asistencia_pct = COALESCE(EXCLUDED.asistencia_pct, parlamentarios.asistencia_pct),
+      sesiones_totales = COALESCE(EXCLUDED.sesiones_totales, parlamentarios.sesiones_totales),
+      sesiones_ausentes = COALESCE(EXCLUDED.sesiones_ausentes, parlamentarios.sesiones_ausentes),
       updated_at = NOW();
     """
 

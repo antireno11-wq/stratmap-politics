@@ -598,6 +598,7 @@ def build_deputy_profiles(
     enrich_profile_page: bool = False,
     enrich_offset: int = 0,
     enrich_limit: int = 0,
+    include_attendance: bool = True,
 ) -> List[Dict[str, Any]]:
     current_year = datetime.now().year
     from_year = int(os.getenv("CHAMBER_ATTENDANCE_FROM_YEAR", "2022"))
@@ -606,11 +607,14 @@ def build_deputy_profiles(
         enrich_offset=enrich_offset,
         enrich_limit=enrich_limit,
     )
-    attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(
-        from_year=from_year,
-        to_year=current_year,
-        session_limit_per_year=300,
-    )
+    attendance_by_id: Dict[str, Dict[str, int]] = {}
+    attendance_by_name: Dict[str, Dict[str, int]] = {}
+    if include_attendance:
+        attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(
+            from_year=from_year,
+            to_year=current_year,
+            session_limit_per_year=300,
+        )
 
     out: List[Dict[str, Any]] = []
     for deputy in deputies:
@@ -618,7 +622,7 @@ def build_deputy_profiles(
         stats = attendance_by_id.get(
             deputy["external_id"],
             attendance_by_name.get(deputy_name_norm, {"present": 0, "absent": 0, "total": 0}),
-        )
+        ) if include_attendance else {"present": 0, "absent": 0, "total": 0}
         total = stats["total"]
         absent = stats["absent"]
         pct_from_sessions = None if total == 0 else round((stats["present"] / total) * 100, 2)
@@ -628,9 +632,9 @@ def build_deputy_profiles(
         out.append(
             {
                 **deputy,
-                "asistencia_pct": pct,
-                "sesiones_totales": total if total > 0 else None,
-                "sesiones_ausentes": absent if total > 0 else None,
+                "asistencia_pct": pct if include_attendance else None,
+                "sesiones_totales": total if (include_attendance and total > 0) else None,
+                "sesiones_ausentes": absent if (include_attendance and total > 0) else None,
                 "nombre_normalizado": _normalize_text(deputy["nombre"]),
             }
         )

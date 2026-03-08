@@ -134,6 +134,7 @@ async def _run_chamber_enrich_job(job_id: str, batch_size: int) -> None:
                 True,   # enrich_profile_page
                 offset, # enrich_offset
                 batch_size, # enrich_limit
+                False, # include_attendance
             )
             processed_batches += 1
             batch_jobs[job_id]["progress"] = min(100, int(((offset + batch_size) / total) * 100))

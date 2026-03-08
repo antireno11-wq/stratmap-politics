@@ -11,11 +11,13 @@ def ingest_deputies_from_chamber(
     enrich_profile_page: bool = False,
     enrich_offset: int = 0,
     enrich_limit: int = 0,
+    include_attendance: bool = True,
 ) -> Dict[str, int]:
     items = build_deputy_profiles(
         enrich_profile_page=enrich_profile_page,
         enrich_offset=enrich_offset,
         enrich_limit=enrich_limit,
+        include_attendance=include_attendance,
     )
     summary = quality_summary(items)
     # Gate de calidad para no sobreescribir con datos vacíos.
