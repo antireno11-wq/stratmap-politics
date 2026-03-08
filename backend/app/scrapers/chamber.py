@@ -5,6 +5,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from datetime import datetime
+from datetime import date
 from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 
@@ -167,11 +168,42 @@ def _request_xml(path: str, params: Optional[Dict[str, Any]] = None) -> bytes:
     return response.content
 
 
+def _find_first(node: ET.Element, name: str) -> Optional[ET.Element]:
+    target = name.lower()
+    for el in node.iter():
+        if _local_name(el.tag).lower() == target:
+            return el
+    return None
+
+
+def _find_all(node: ET.Element, name: str) -> List[ET.Element]:
+    target = name.lower()
+    return [el for el in node.iter() if _local_name(el.tag).lower() == target]
+
+
+def _text(node: Optional[ET.Element]) -> str:
+    if node is None:
+        return ""
+    return (node.text or "").strip()
+
+
 def _to_int(value: Optional[str], fallback: int = 0) -> int:
     try:
         return int(float((value or "").replace(",", ".")))
     except Exception:
         return fallback
+
+
+def _to_date(value: Optional[str]) -> Optional[date]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
 
 
 def _attendance_status_is_absent(status: str) -> bool:
@@ -187,52 +219,65 @@ def _attendance_status_is_absent(status: str) -> bool:
     return any(p in t for p in absent_patterns)
 
 
+def _normalize_attendance_state(status: str) -> str:
+    t = _normalize_text(status)
+    if "pareo" in t:
+        return "pareo"
+    if "permiso" in t:
+        return "permiso"
+    if _attendance_status_is_absent(t):
+        return "ausente"
+    return "presente"
+
+
 def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     xml = _request_xml("WSDiputado.asmx/retornarDiputadosPeriodoActual")
-    records = _records_from_xml(xml)
-
+    root = ET.fromstring(xml)
     deputies: List[Dict[str, str]] = []
-    for row in records:
-        external_id = _normalize_external_id(
-            _first_present(
-                row,
-                ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "id"],
-            )
-            or _value_by_key_tokens(
-                row,
-                ["id"],
-                exclude_tokens=["region", "distrito", "partido", "sesion", "votacion", "comision"],
-            )
-        )
-        nombre = _compose_full_name(row)
+    for periodo_node in _find_all(root, "DiputadoPeriodo"):
+        diputado_node = _find_first(periodo_node, "Diputado")
+        if diputado_node is None:
+            continue
+
+        external_id = _normalize_external_id(_text(_find_first(diputado_node, "Id")))
+        nombre_1 = _text(_find_first(diputado_node, "Nombre"))
+        nombre_2 = _text(_find_first(diputado_node, "Nombre2"))
+        ape_pat = _text(_find_first(diputado_node, "ApellidoPaterno"))
+        ape_mat = _text(_find_first(diputado_node, "ApellidoMaterno"))
+        nombre = " ".join([p for p in [nombre_1, nombre_2, ape_pat, ape_mat] if p]).strip()
         if not nombre:
-            nombre = _value_by_key_tokens(row, ["nombre"]) or _value_by_key_tokens(row, ["parlament"])
-        partido = (
-            _first_present(row, ["partido", "militancia", "partidonombre", "pactopolitico", "siglapartido", "bancada"])
-            or _value_by_key_tokens(row, ["partido"])
-            or _value_by_key_tokens(row, ["bancada"])
-        )
-        distrito = (
-            _first_present(row, ["distrito", "distritonombre", "nrodistrito", "regiondistrito", "distritoelectoral"])
-            or _value_by_key_tokens(row, ["distrito"])
-            or _value_by_key_tokens(row, ["circunscripcion"])
-        )
-        region = (
-            _first_present(row, ["region", "regionnombre", "nomregion"])
-            or _value_by_key_tokens(row, ["region"], exclude_tokens=["distrito"])
-            or distrito
-        )
+            nombre = " ".join([p for p in [nombre_1, ape_pat, ape_mat] if p]).strip()
+
+        distrito_node = _find_first(periodo_node, "Distrito")
+        distrito_num = _text(_find_first(distrito_node, "Numero")) if distrito_node is not None else ""
+        distrito = f"Distrito {distrito_num}" if distrito_num else "Sin dato"
+
+        # Partido: toma la última militancia conocida dentro del diputado.
+        partido = "Sin dato"
+        militancias = _find_all(diputado_node, "Militancia")
+        for m in militancias:
+            partido_nombre = _text(_find_first(m, "Nombre"))
+            partido_alias = _text(_find_first(m, "Alias"))
+            candidato = partido_nombre or partido_alias
+            if candidato:
+                partido = candidato
+
+        region = "Sin dato"
+        comunas = _find_all(distrito_node, "Comuna") if distrito_node is not None else []
+        if comunas:
+            region_cand = _text(_find_first(comunas[0], "Region"))
+            if region_cand:
+                region = region_cand
 
         if not external_id or not nombre or _looks_like_party_label(nombre):
             continue
-
         deputies.append(
             {
                 "external_id": external_id,
                 "nombre": nombre,
-                "partido": partido or "Sin dato",
-                "distrito_circunscripcion": distrito or "Sin dato",
-                "region": region or "Sin dato",
+                "partido": partido,
+                "distrito_circunscripcion": distrito,
+                "region": region,
                 "periodo": f"{datetime.now().year}-ACTUAL",
             }
         )
@@ -307,6 +352,52 @@ def fetch_attendance_by_deputy(
                     t[k]["present"] += 1
 
     return dict(stats_by_id), dict(stats_by_name)
+
+
+def fetch_sessions(year: int, limit: int = 80) -> List[Dict[str, Any]]:
+    sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
+    session_records = _records_from_xml(sessions_xml)
+
+    sessions: List[Dict[str, Any]] = []
+    for row in session_records:
+        session_id = _to_int(_first_present(row, ["sesid", "ses_id", "idsesion", "sesionid", "id"]), -1)
+        if session_id <= 0:
+            continue
+        fecha = _to_date(_first_present(row, ["fecha", "f_sesion", "fecha_sesion", "sesfecha"]))
+        sessions.append({"session_id": session_id, "fecha": fecha})
+
+    dedup = {s["session_id"]: s for s in sessions}
+    ordered = sorted(dedup.values(), key=lambda x: x["session_id"], reverse=True)
+    return ordered[: max(1, limit)]
+
+
+def scrape_attendance_rows(year: int, session_limit: int = 80) -> List[Dict[str, Any]]:
+    sessions = fetch_sessions(year=year, limit=session_limit)
+    out: List[Dict[str, Any]] = []
+
+    for session in sessions:
+        sid = session["session_id"]
+        fecha = session.get("fecha")
+        xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
+        attendance_records = _records_from_xml(xml)
+
+        for row in attendance_records:
+            nombre = _compose_full_name(row) or _first_present(
+                row, ["nombre", "dipnombre", "nombreparlamentario", "parlamentario", "nombres"]
+            )
+            if not nombre:
+                continue
+            status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
+            out.append(
+                {
+                    "session_id": sid,
+                    "fecha": fecha,
+                    "diputado_nombre": nombre.strip(),
+                    "estado": _normalize_attendance_state(status),
+                }
+            )
+
+    return out
 
 
 def build_deputy_profiles() -> List[Dict[str, Any]]:

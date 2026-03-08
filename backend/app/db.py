@@ -42,6 +42,20 @@ def init_db() -> None:
     CREATE INDEX IF NOT EXISTS idx_parlamentarios_nombre ON parlamentarios(nombre);
     CREATE INDEX IF NOT EXISTS idx_parlamentarios_partido ON parlamentarios(partido);
     CREATE INDEX IF NOT EXISTS idx_parlamentarios_region ON parlamentarios(region);
+
+    CREATE TABLE IF NOT EXISTS asistencia_sala (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER NOT NULL,
+        fecha DATE NULL,
+        diputado_nombre TEXT NOT NULL,
+        estado TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'camara.opendata',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(session_id, diputado_nombre)
+    );
+    CREATE INDEX IF NOT EXISTS idx_asistencia_sala_session_id ON asistencia_sala(session_id);
+    CREATE INDEX IF NOT EXISTS idx_asistencia_sala_diputado ON asistencia_sala(diputado_nombre);
+    CREATE INDEX IF NOT EXISTS idx_asistencia_sala_estado ON asistencia_sala(estado);
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -52,17 +66,22 @@ def init_db() -> None:
             # Backfill no destructivo desde la tabla antigua si existe.
             cur.execute(
                 """
-                INSERT INTO parlamentarios (
-                  camara, external_id, nombre, partido, distrito_circunscripcion, region, periodo, source, updated_at
-                )
-                SELECT 'DIPUTADO', d.external_id, d.nombre,
-                       COALESCE(NULLIF(d.partido, ''), 'Sin dato'),
-                       COALESCE(NULLIF(d.distrito, ''), 'Sin dato'),
-                       COALESCE(NULLIF(d.region, ''), 'Sin dato'),
-                       COALESCE(NULLIF(d.periodo, ''), 'Sin dato'),
-                       'legacy_diputados', NOW()
-                FROM diputados d
-                ON CONFLICT (camara, external_id) DO NOTHING;
+                DO $$
+                BEGIN
+                  IF to_regclass('public.diputados') IS NOT NULL THEN
+                    INSERT INTO parlamentarios (
+                      camara, external_id, nombre, partido, distrito_circunscripcion, region, periodo, source, updated_at
+                    )
+                    SELECT 'DIPUTADO', d.external_id, d.nombre,
+                           COALESCE(NULLIF(d.partido, ''), 'Sin dato'),
+                           COALESCE(NULLIF(d.distrito, ''), 'Sin dato'),
+                           COALESCE(NULLIF(d.region, ''), 'Sin dato'),
+                           COALESCE(NULLIF(d.periodo, ''), 'Sin dato'),
+                           'legacy_diputados', NOW()
+                    FROM diputados d
+                    ON CONFLICT (camara, external_id) DO NOTHING;
+                  END IF;
+                END $$;
                 """
             )
         conn.commit()
@@ -308,3 +327,59 @@ def count_by_camara() -> Dict[str, int]:
             for row in cur.fetchall():
                 out[row["camara"]] = row["total"]
     return out
+
+
+def replace_asistencia_sala(rows: List[Dict[str, Any]], source: str = "camara.opendata") -> int:
+    if not rows:
+        return 0
+
+    session_ids = sorted({int(r["session_id"]) for r in rows if r.get("session_id") is not None})
+    sql_delete = "DELETE FROM asistencia_sala WHERE session_id = ANY(%(session_ids)s);"
+    sql_insert = """
+    INSERT INTO asistencia_sala (session_id, fecha, diputado_nombre, estado, source)
+    VALUES (%(session_id)s, %(fecha)s, %(diputado_nombre)s, %(estado)s, %(source)s)
+    ON CONFLICT (session_id, diputado_nombre) DO UPDATE SET
+      fecha = EXCLUDED.fecha,
+      estado = EXCLUDED.estado,
+      source = EXCLUDED.source;
+    """
+
+    inserted = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql_delete, {"session_ids": session_ids})
+            for row in rows:
+                params = {
+                    "session_id": int(row["session_id"]),
+                    "fecha": row.get("fecha"),
+                    "diputado_nombre": str(row.get("diputado_nombre", "")).strip(),
+                    "estado": str(row.get("estado", "")).strip().lower(),
+                    "source": source,
+                }
+                if not params["diputado_nombre"] or not params["estado"]:
+                    continue
+                cur.execute(sql_insert, params)
+                inserted += 1
+        conn.commit()
+    return inserted
+
+
+def calculate_attendance_pct_by_deputy() -> List[Dict[str, Any]]:
+    sql = """
+    SELECT
+      diputado_nombre,
+      COUNT(*)::int AS sesiones_totales,
+      COUNT(*) FILTER (WHERE estado IN ('ausente', 'permiso', 'pareo'))::int AS sesiones_ausentes,
+      ROUND(
+        100.0 * (COUNT(*) FILTER (WHERE estado = 'presente'))::numeric / NULLIF(COUNT(*), 0),
+        2
+      )::float AS asistencia_pct
+    FROM asistencia_sala
+    GROUP BY diputado_nombre
+    ORDER BY asistencia_pct DESC NULLS LAST, sesiones_totales DESC, diputado_nombre ASC;
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall()
+    return [dict(r) for r in rows]

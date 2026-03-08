@@ -16,7 +16,13 @@ from .db import (
     list_parliamentarians,
     upsert_parliamentarians,
 )
-from .ingest import ingest_all_parliamentarians, ingest_deputies_from_chamber, ingest_senators_from_senate
+from .ingest import (
+    attendance_percentage_summary,
+    ingest_all_parliamentarians,
+    ingest_attendance_sala,
+    ingest_deputies_from_chamber,
+    ingest_senators_from_senate,
+)
 from .models import IngestPayload
 from .scrapers.chamber import inspect_deputies_source
 
@@ -114,6 +120,27 @@ def ingest_senate_senators() -> dict:
         return {"ok": True, "source": "senado", "camara": "SENADOR", **result}
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error de ingesta Senado: {exc}")
+
+
+@app.post("/api/v1/ingest/chamber/attendance")
+def ingest_chamber_attendance(
+    year: Optional[int] = Query(default=None, ge=2010, le=2100),
+    session_limit: int = Query(default=80, ge=1, le=500),
+) -> dict:
+    target_year = year or datetime.now(timezone.utc).year
+    try:
+        result = ingest_attendance_sala(year=target_year, session_limit=session_limit)
+        return {"ok": True, "source": "camara", "year": target_year, **result}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error de ingesta asistencia Camara: {exc}")
+
+
+@app.get("/api/v1/attendance/deputies")
+def attendance_deputies_summary() -> dict:
+    try:
+        return attendance_percentage_summary()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error calculando asistencia: {exc}")
 
 
 @app.post("/api/v1/ingest/all")

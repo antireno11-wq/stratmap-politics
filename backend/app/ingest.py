@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Dict
 
-from .db import quality_summary, replace_parliamentarians
-from .scrapers.chamber import build_deputy_profiles
+from .db import calculate_attendance_pct_by_deputy, quality_summary, replace_asistencia_sala, replace_parliamentarians
+from .scrapers.chamber import build_deputy_profiles, scrape_attendance_rows
 from .scrapers.senate import fetch_senators
 
 
@@ -40,3 +40,14 @@ def ingest_all_parliamentarians() -> Dict[str, int]:
         "senadores_processed": s["processed"],
         "total_processed": d["processed"] + s["processed"],
     }
+
+
+def ingest_attendance_sala(year: int, session_limit: int = 80) -> Dict[str, int]:
+    rows = scrape_attendance_rows(year=year, session_limit=session_limit)
+    stored = replace_asistencia_sala(rows, source="camara.opendata")
+    return {"sessions_processed": len({r["session_id"] for r in rows}), "rows_processed": stored}
+
+
+def attendance_percentage_summary() -> Dict[str, object]:
+    items = calculate_attendance_pct_by_deputy()
+    return {"items": items, "count": len(items)}
