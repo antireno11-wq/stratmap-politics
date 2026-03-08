@@ -297,7 +297,7 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     for d in out:
         needs_geo = _is_missing(d.get("distrito_circunscripcion")) or _is_missing(d.get("region"))
         api_extra = fetch_deputy_detail(d["external_id"]) if (needs_geo or _is_missing(d.get("partido"))) else None
-        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"]) if needs_geo else None
+        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"])
 
         if api_extra:
             if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(api_extra.get("distrito_circunscripcion")):
@@ -312,6 +312,12 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
                 d["distrito_circunscripcion"] = page_extra["distrito_circunscripcion"]
             if _is_missing(d.get("region")) and not _is_missing(page_extra.get("region")):
                 d["region"] = page_extra["region"]
+            if _is_missing(d.get("partido")) and not _is_missing(page_extra.get("partido")):
+                d["partido"] = page_extra["partido"]
+            if page_extra.get("periodo"):
+                d["periodo"] = str(page_extra["periodo"])
+            if page_extra.get("asistencia_pct") is not None:
+                d["asistencia_pct"] = page_extra["asistencia_pct"]
     return out
 
 
@@ -363,6 +369,9 @@ def fetch_deputy_detail_from_profile_page(external_id: str) -> Optional[Dict[str
 
     distrito = "Sin dato"
     region = "Sin dato"
+    partido = "Sin dato"
+    periodo = f"{datetime.now().year}-ACTUAL"
+    asistencia_pct: Optional[float] = None
 
     district_match = re.search(r"Distrito\\s*(?:N[°º]\\s*)?(\\d{1,2})", text, re.IGNORECASE)
     if district_match:
@@ -379,9 +388,33 @@ def fetch_deputy_detail_from_profile_page(external_id: str) -> Optional[Dict[str
         if region_raw:
             region = region_raw
 
+    party_match = re.search(r"Partido\\s*:\\s*(.+?)\\s+Bancada\\s*:", text, re.IGNORECASE)
+    if party_match:
+        party_raw = re.sub(r"\\s+", " ", party_match.group(1)).strip(" -")
+        if party_raw:
+            partido = party_raw
+
+    periodo_match = re.search(r"Per[ií]odo\\s*:\\s*([0-9]{4}\\s*[-–]\\s*[0-9]{4})", text, re.IGNORECASE)
+    if periodo_match:
+        periodo = periodo_match.group(1).replace("–", "-").replace(" ", "")
+
+    asistencia_match = re.search(
+        r"Porcentaje de Asistencia\\s*([0-9]+(?:[\\.,][0-9]+)?)%",
+        text,
+        re.IGNORECASE,
+    )
+    if asistencia_match:
+        try:
+            asistencia_pct = float(asistencia_match.group(1).replace(",", "."))
+        except ValueError:
+            asistencia_pct = None
+
     return {
         "distrito_circunscripcion": distrito,
         "region": region,
+        "partido": partido,
+        "periodo": periodo,
+        "asistencia_pct": asistencia_pct,
     }
 
 
@@ -569,7 +602,9 @@ def build_deputy_profiles() -> List[Dict[str, Any]]:
         )
         total = stats["total"]
         absent = stats["absent"]
-        pct = None if total == 0 else round((stats["present"] / total) * 100, 2)
+        pct_from_sessions = None if total == 0 else round((stats["present"] / total) * 100, 2)
+        pct_from_profile = deputy.get("asistencia_pct")
+        pct = pct_from_profile if pct_from_profile is not None else pct_from_sessions
 
         out.append(
             {
