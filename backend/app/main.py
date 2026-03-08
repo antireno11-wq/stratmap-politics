@@ -163,7 +163,7 @@ def ranking_legacy(
             "distrito": r["distrito_circunscripcion"],
             "region": r["region"],
             "score": 0,
-            "asistencia_pct": 0,
+            "asistencia_pct": r.get("asistencia_pct") or 0,
             "proyectos_presentados": 0,
             "camara": r["camara"],
         }

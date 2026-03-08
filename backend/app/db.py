@@ -30,6 +30,9 @@ def init_db() -> None:
         region TEXT NOT NULL DEFAULT 'Sin dato',
         periodo TEXT NOT NULL DEFAULT 'Sin dato',
         source TEXT NOT NULL DEFAULT 'manual',
+        asistencia_pct NUMERIC(5,2) NULL,
+        sesiones_totales INTEGER NULL,
+        sesiones_ausentes INTEGER NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(camara, external_id)
@@ -43,6 +46,9 @@ def init_db() -> None:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS asistencia_pct NUMERIC(5,2) NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS sesiones_totales INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS sesiones_ausentes INTEGER NULL;")
             # Backfill no destructivo desde la tabla antigua si existe.
             cur.execute(
                 """
@@ -81,10 +87,10 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
     insert_sql = """
     INSERT INTO parlamentarios (
       camara, external_id, nombre, partido, distrito_circunscripcion,
-      region, periodo, source, updated_at
+      region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes, updated_at
     ) VALUES (
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
-      %(region)s, %(periodo)s, %(source)s, NOW()
+      %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s, NOW()
     )
     ON CONFLICT (camara, external_id) DO UPDATE SET
       nombre = EXCLUDED.nombre,
@@ -93,6 +99,9 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       region = EXCLUDED.region,
       periodo = EXCLUDED.periodo,
       source = EXCLUDED.source,
+      asistencia_pct = EXCLUDED.asistencia_pct,
+      sesiones_totales = EXCLUDED.sesiones_totales,
+      sesiones_ausentes = EXCLUDED.sesiones_ausentes,
       updated_at = NOW();
     """
 
@@ -115,6 +124,9 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
                     "region": str(item.get("region") or "Sin dato").strip() or "Sin dato",
                     "periodo": str(item.get("periodo") or "Sin dato").strip() or "Sin dato",
                     "source": source,
+                    "asistencia_pct": item.get("asistencia_pct"),
+                    "sesiones_totales": item.get("sesiones_totales"),
+                    "sesiones_ausentes": item.get("sesiones_ausentes"),
                 }
                 if not params["external_id"] or not params["nombre"]:
                     continue
@@ -132,10 +144,10 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
     sql = """
     INSERT INTO parlamentarios (
       camara, external_id, nombre, partido, distrito_circunscripcion,
-      region, periodo, source, updated_at
+      region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes, updated_at
     ) VALUES (
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
-      %(region)s, %(periodo)s, %(source)s, NOW()
+      %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s, NOW()
     )
     ON CONFLICT (camara, external_id) DO UPDATE SET
       nombre = EXCLUDED.nombre,
@@ -144,6 +156,9 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       region = EXCLUDED.region,
       periodo = EXCLUDED.periodo,
       source = EXCLUDED.source,
+      asistencia_pct = EXCLUDED.asistencia_pct,
+      sesiones_totales = EXCLUDED.sesiones_totales,
+      sesiones_ausentes = EXCLUDED.sesiones_ausentes,
       updated_at = NOW();
     """
 
@@ -166,6 +181,9 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
                     "region": str(item.get("region") or "Sin dato").strip() or "Sin dato",
                     "periodo": str(item.get("periodo") or "Sin dato").strip() or "Sin dato",
                     "source": source,
+                    "asistencia_pct": item.get("asistencia_pct"),
+                    "sesiones_totales": item.get("sesiones_totales"),
+                    "sesiones_ausentes": item.get("sesiones_ausentes"),
                 }
                 if not params["external_id"] or not params["nombre"]:
                     continue
@@ -209,6 +227,9 @@ def list_parliamentarians(
       p.distrito_circunscripcion,
       p.region,
       p.periodo,
+      p.asistencia_pct::float AS asistencia_pct,
+      p.sesiones_totales,
+      p.sesiones_ausentes,
       p.source,
       p.updated_at
     FROM parlamentarios p
@@ -229,7 +250,8 @@ def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:
     sql = """
     SELECT
       id, camara, external_id, nombre, partido, distrito_circunscripcion,
-      region, periodo, source, created_at, updated_at
+      region, periodo, asistencia_pct::float AS asistencia_pct,
+      sesiones_totales, sesiones_ausentes, source, created_at, updated_at
     FROM parlamentarios
     WHERE id = %(id)s
     LIMIT 1;

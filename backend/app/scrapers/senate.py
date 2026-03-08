@@ -52,6 +52,9 @@ def fetch_senators() -> List[Dict[str, str]]:
                 "distrito_circunscripcion": "Sin dato",
                 "region": "Sin dato",
                 "periodo": f"{datetime.now().year}-ACTUAL",
+                "asistencia_pct": None,
+                "sesiones_totales": None,
+                "sesiones_ausentes": None,
             }
         )
 

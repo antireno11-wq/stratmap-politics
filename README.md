@@ -1,6 +1,6 @@
 # Stratmap Politics (Base Parlamento)
 
-Primera fase: catalogo de parlamentarios de Chile (diputados + senadores).
+Base actual: catalogo de parlamentarios de Chile (diputados + senadores) + asistencia inicial.
 
 ## Stack
 - Backend: FastAPI + PostgreSQL
@@ -8,6 +8,9 @@ Primera fase: catalogo de parlamentarios de Chile (diputados + senadores).
 
 ## Objetivo fase actual
 - Ingerir y mostrar parlamentarios por camara.
+- Mostrar asistencia de forma incremental:
+  - Diputados: asistencia desde OpenData Camara.
+  - Senadores: `N/D` hasta conectar fuente oficial equivalente.
 - No calcular score todavia.
 - Agregar metricas en etapas posteriores (asistencia, votaciones, proyectos, lobby).
 

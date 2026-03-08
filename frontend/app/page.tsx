@@ -45,6 +45,8 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
               <th>Distrito/Circunscripcion</th>
               <th>Region</th>
               <th>Periodo</th>
+              <th>Asistencia %</th>
+              <th>Sesiones</th>
             </tr>
           </thead>
           <tbody>
@@ -56,6 +58,12 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
                 <td>{row.distrito_circunscripcion}</td>
                 <td>{row.region}</td>
                 <td>{row.periodo}</td>
+                <td>{row.asistencia_pct == null ? "N/D" : Number(row.asistencia_pct).toFixed(2)}</td>
+                <td>
+                  {row.sesiones_totales == null || row.sesiones_ausentes == null
+                    ? "N/D"
+                    : `${row.sesiones_totales - row.sesiones_ausentes}/${row.sesiones_totales}`}
+                </td>
               </tr>
             ))}
           </tbody>
