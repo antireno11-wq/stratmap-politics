@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -30,6 +31,7 @@ from .scrapers.chamber import inspect_attendance_source, inspect_deputies_source
 auto_ingest_task: Optional[asyncio.Task] = None
 last_auto_ingest_at: Optional[str] = None
 last_auto_ingest_result: Optional[dict] = None
+batch_jobs: dict[str, dict] = {}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -119,6 +121,53 @@ def ingest_chamber_deputies(
         }
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Error de ingesta Camara: {exc}")
+
+
+async def _run_chamber_enrich_job(job_id: str, batch_size: int) -> None:
+    batch_jobs[job_id]["status"] = "running"
+    try:
+        total = 157
+        processed_batches = 0
+        for offset in range(0, total, batch_size):
+            await asyncio.to_thread(
+                ingest_deputies_from_chamber,
+                True,   # enrich_profile_page
+                offset, # enrich_offset
+                batch_size, # enrich_limit
+            )
+            processed_batches += 1
+            batch_jobs[job_id]["progress"] = min(100, int(((offset + batch_size) / total) * 100))
+            batch_jobs[job_id]["processed_batches"] = processed_batches
+        batch_jobs[job_id]["status"] = "completed"
+        batch_jobs[job_id]["progress"] = 100
+        batch_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+    except Exception as exc:
+        batch_jobs[job_id]["status"] = "failed"
+        batch_jobs[job_id]["error"] = str(exc)
+        batch_jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post("/api/v1/ingest/chamber/deputies/enrich/start")
+async def start_chamber_enrich(batch_size: int = Query(default=20, ge=5, le=50)) -> dict:
+    job_id = str(uuid.uuid4())
+    batch_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "progress": 0,
+        "batch_size": batch_size,
+        "processed_batches": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    asyncio.create_task(_run_chamber_enrich_job(job_id, batch_size))
+    return {"ok": True, "job_id": job_id, "status": "queued", "batch_size": batch_size}
+
+
+@app.get("/api/v1/ingest/chamber/deputies/enrich/{job_id}")
+def chamber_enrich_status(job_id: str) -> dict:
+    job = batch_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job no encontrado")
+    return job
 
 
 @app.get("/api/v1/debug/chamber/source")
