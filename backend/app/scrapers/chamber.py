@@ -10,11 +10,16 @@ from typing import Any, Dict, List, Optional
 from xml.etree import ElementTree as ET
 
 import requests
+from bs4 import BeautifulSoup
 
 
 BASE_URL = os.getenv(
     "CHAMBER_API_BASE",
     "https://opendata.camara.cl/camaradiputados/WServices",
+).rstrip("/")
+DEPUTY_PROFILE_URL = os.getenv(
+    "CHAMBER_DEPUTY_PROFILE_URL",
+    "https://www.camara.cl/diputados/detalle/asistencia_sala.aspx",
 ).rstrip("/")
 
 
@@ -290,15 +295,23 @@ def fetch_deputies_periodo_actual() -> List[Dict[str, str]]:
     dedup: Dict[str, Dict[str, str]] = {d["external_id"]: d for d in deputies}
     out = list(dedup.values())
     for d in out:
-        if _is_missing(d.get("distrito_circunscripcion")) or _is_missing(d.get("region")):
-            extra = fetch_deputy_detail(d["external_id"])
-            if extra:
-                if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(extra.get("distrito_circunscripcion")):
-                    d["distrito_circunscripcion"] = extra["distrito_circunscripcion"]
-                if _is_missing(d.get("region")) and not _is_missing(extra.get("region")):
-                    d["region"] = extra["region"]
-                if _is_missing(d.get("partido")) and not _is_missing(extra.get("partido")):
-                    d["partido"] = extra["partido"]
+        needs_geo = _is_missing(d.get("distrito_circunscripcion")) or _is_missing(d.get("region"))
+        api_extra = fetch_deputy_detail(d["external_id"]) if (needs_geo or _is_missing(d.get("partido"))) else None
+        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"]) if needs_geo else None
+
+        if api_extra:
+            if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(api_extra.get("distrito_circunscripcion")):
+                d["distrito_circunscripcion"] = api_extra["distrito_circunscripcion"]
+            if _is_missing(d.get("region")) and not _is_missing(api_extra.get("region")):
+                d["region"] = api_extra["region"]
+            if _is_missing(d.get("partido")) and not _is_missing(api_extra.get("partido")):
+                d["partido"] = api_extra["partido"]
+
+        if page_extra:
+            if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(page_extra.get("distrito_circunscripcion")):
+                d["distrito_circunscripcion"] = page_extra["distrito_circunscripcion"]
+            if _is_missing(d.get("region")) and not _is_missing(page_extra.get("region")):
+                d["region"] = page_extra["region"]
     return out
 
 
@@ -335,6 +348,40 @@ def fetch_deputy_detail(external_id: str) -> Optional[Dict[str, str]]:
         "distrito_circunscripcion": distrito,
         "region": region,
         "partido": partido,
+    }
+
+
+def fetch_deputy_detail_from_profile_page(external_id: str) -> Optional[Dict[str, str]]:
+    try:
+        response = requests.get(DEPUTY_PROFILE_URL, params={"prmId": external_id}, timeout=30)
+        response.raise_for_status()
+    except Exception:
+        return None
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    text = soup.get_text(" ", strip=True)
+
+    distrito = "Sin dato"
+    region = "Sin dato"
+
+    district_match = re.search(r"Distrito\\s*(?:N[°º]\\s*)?(\\d{1,2})", text, re.IGNORECASE)
+    if district_match:
+        distrito = f"Distrito {district_match.group(1)}"
+
+    region_match = re.search(
+        r"Regi[oó]n\\s*[:\\-]?\\s*([A-Za-zÁÉÍÓÚÑáéíóúüÜ'()\\-\\s]{4,80})",
+        text,
+        re.IGNORECASE,
+    )
+    if region_match:
+        region_raw = re.sub(r"\\s+", " ", region_match.group(1)).strip(" -")
+        region_raw = re.split(r"(Comisi[oó]n|Partido|Per[ií]odo|Asistencia)", region_raw, maxsplit=1)[0].strip(" -")
+        if region_raw:
+            region = region_raw
+
+    return {
+        "distrito_circunscripcion": distrito,
+        "region": region,
     }
 
 
