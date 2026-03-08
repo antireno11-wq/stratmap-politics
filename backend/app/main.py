@@ -97,14 +97,24 @@ def ingest_status() -> dict:
 
 
 @app.post("/api/v1/ingest/chamber/deputies")
-def ingest_chamber_deputies(enrich_profile_page: bool = Query(default=False)) -> dict:
+def ingest_chamber_deputies(
+    enrich_profile_page: bool = Query(default=False),
+    enrich_offset: int = Query(default=0, ge=0),
+    enrich_limit: int = Query(default=0, ge=0, le=200),
+) -> dict:
     try:
-        result = ingest_deputies_from_chamber(enrich_profile_page=enrich_profile_page)
+        result = ingest_deputies_from_chamber(
+            enrich_profile_page=enrich_profile_page,
+            enrich_offset=enrich_offset,
+            enrich_limit=enrich_limit,
+        )
         return {
             "ok": True,
             "source": "camara",
             "camara": "DIPUTADO",
             "enrich_profile_page": enrich_profile_page,
+            "enrich_offset": enrich_offset,
+            "enrich_limit": enrich_limit,
             **result,
         }
     except Exception as exc:
