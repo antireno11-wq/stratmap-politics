@@ -181,6 +181,16 @@ def _find_first(node: ET.Element, name: str) -> Optional[ET.Element]:
     return None
 
 
+def _find_child(node: Optional[ET.Element], name: str) -> Optional[ET.Element]:
+    if node is None:
+        return None
+    target = name.lower()
+    for child in list(node):
+        if _local_name(child.tag).lower() == target:
+            return child
+    return None
+
+
 def _find_all(node: ET.Element, name: str) -> List[ET.Element]:
     target = name.lower()
     return [el for el in node.iter() if _local_name(el.tag).lower() == target]
@@ -208,7 +218,14 @@ def _to_date(value: Optional[str]) -> Optional[date]:
     raw = (value or "").strip()
     if not raw:
         return None
-    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%Y/%m/%d"):
+    for fmt in (
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+    ):
         try:
             return datetime.strptime(raw, fmt).date()
         except ValueError:
@@ -265,6 +282,41 @@ def _looks_like_admin_attendance_label(name: str) -> bool:
         "labor parlamentaria",
     ]
     return any(tok in t for tok in blocked_tokens)
+
+
+def _attendance_rows_from_session_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
+    root = ET.fromstring(xml_bytes)
+    rows: List[Dict[str, str]] = []
+
+    for asistencia_node in _find_all(root, "Asistencia"):
+        tipo_asistencia = _text(_find_child(asistencia_node, "TipoAsistencia"))
+
+        diputado_node = _find_child(asistencia_node, "Diputado")
+        if diputado_node is None:
+            continue
+
+        external_id = _normalize_external_id(_text(_find_child(diputado_node, "Id")))
+        nombre_1 = _text(_find_child(diputado_node, "Nombre"))
+        nombre_2 = _text(_find_child(diputado_node, "Nombre2"))
+        ape_pat = _text(_find_child(diputado_node, "ApellidoPaterno"))
+        ape_mat = _text(_find_child(diputado_node, "ApellidoMaterno"))
+        nombre = _clean_person_name(" ".join([p for p in [nombre_1, nombre_2, ape_pat, ape_mat] if p]))
+        if not nombre:
+            continue
+
+        justificacion_node = _find_child(asistencia_node, "Justificacion")
+        justificacion = _text(_find_child(justificacion_node, "Nombre"))
+        status = " - ".join([p for p in [tipo_asistencia, justificacion] if p]).strip()
+
+        rows.append(
+            {
+                "external_id": external_id or "",
+                "nombre": nombre,
+                "status": status,
+            }
+        )
+
+    return rows
 
 
 def _clean_person_name(name: str) -> str:
@@ -517,6 +569,7 @@ def inspect_deputy_period_structure(sample_limit: int = 3) -> Dict[str, Any]:
     return {"total_period_nodes": len(period_nodes), "samples": samples}
 
 
+
 def fetch_attendance_by_deputy(
     from_year: int, to_year: int, session_limit_per_year: int = 300
 ) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
@@ -532,19 +585,11 @@ def fetch_attendance_by_deputy(
 
     for sid in session_ids:
         xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
-        attendance_records = _records_from_xml(xml)
+        attendance_records = _attendance_rows_from_session_xml(xml)
 
         for row in attendance_records:
-            external_id = _normalize_external_id(
-                _first_present(
-                    row,
-                    ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "id"],
-                )
-            )
-            nombre_raw = _compose_full_name(row) or _first_present(
-                row, ["nombre", "dipnombre", "nombreparlamentario", "parlamentario", "nombres"]
-            )
-            nombre = _clean_person_name(nombre_raw)
+            external_id = _normalize_external_id(row.get("external_id"))
+            nombre = _clean_person_name(row.get("nombre", ""))
             nombre_norm = _normalize_text(nombre)
             if not nombre_norm:
                 continue
@@ -553,7 +598,7 @@ def fetch_attendance_by_deputy(
             if nombre_norm not in valid_names:
                 continue
 
-            status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
+            status = row.get("status", "")
             estado = _normalize_attendance_state(status)
             if estado == "desconocido":
                 continue
@@ -576,15 +621,45 @@ def fetch_attendance_by_deputy(
 
 def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
     sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
-    session_records = _records_from_xml(sessions_xml)
+    root = ET.fromstring(sessions_xml)
 
     sessions: List[Dict[str, Any]] = []
-    for row in session_records:
-        session_id = _to_int(_first_present(row, ["sesid", "ses_id", "idsesion", "sesionid", "id"]), -1)
+    for sesion_node in _find_all(root, "Sesion"):
+        session_id = _to_int(
+            _text(_find_child(sesion_node, "Id")),
+            -1,
+        )
         if session_id <= 0:
             continue
-        fecha = _to_date(_first_present(row, ["fecha", "f_sesion", "fecha_sesion", "sesfecha"]))
+
+        estado = _normalize_text(_text(_find_child(sesion_node, "Estado")))
+        if estado and "celebrada" not in estado:
+            continue
+
+        fecha = _to_date(
+            _text(_find_child(sesion_node, "FechaInicio"))
+            or _text(_find_child(sesion_node, "Fecha"))
+        )
         sessions.append({"session_id": session_id, "fecha": fecha})
+
+    if not sessions:
+        session_records = _records_from_xml(sessions_xml)
+        for row in session_records:
+            session_id = _to_int(_first_present(row, ["sesid", "ses_id", "idsesion", "sesionid", "id"]), -1)
+            if session_id <= 0:
+                continue
+
+            estado = _normalize_text(_first_present(row, ["estado"]))
+            if estado and "celebrada" not in estado:
+                continue
+
+            fecha = _to_date(
+                _first_present(
+                    row,
+                    ["fechainicio", "fecha_inicio", "fecha", "f_sesion", "fecha_sesion", "sesfecha"],
+                )
+            )
+            sessions.append({"session_id": session_id, "fecha": fecha})
 
     dedup = {s["session_id"]: s for s in sessions}
     ordered = sorted(dedup.values(), key=lambda x: x["session_id"], reverse=True)
@@ -603,13 +678,10 @@ def scrape_attendance_rows(from_year: int, to_year: int, session_limit_per_year:
         sid = session["session_id"]
         fecha = session.get("fecha")
         xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
-        attendance_records = _records_from_xml(xml)
+        attendance_records = _attendance_rows_from_session_xml(xml)
 
         for row in attendance_records:
-            nombre_raw = _compose_full_name(row) or _first_present(
-                row, ["nombre", "dipnombre", "nombreparlamentario", "parlamentario", "nombres"]
-            )
-            nombre = _clean_person_name(nombre_raw)
+            nombre = _clean_person_name(row.get("nombre", ""))
             if not nombre:
                 continue
             if _looks_like_admin_attendance_label(nombre):
@@ -619,7 +691,7 @@ def scrape_attendance_rows(from_year: int, to_year: int, session_limit_per_year:
             if nombre_norm not in valid_names:
                 continue
 
-            status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
+            status = row.get("status", "")
             estado = _normalize_attendance_state(status)
             if estado == "desconocido":
                 continue
@@ -643,10 +715,10 @@ def inspect_attendance_source(year: int, session_limit: int = 10, sample_limit: 
 
     sid = sessions[0]["session_id"]
     xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
-    records = _records_from_xml(xml)
+    records = _attendance_rows_from_session_xml(xml)
     sample_rows = records[: max(1, min(sample_limit, 30))]
     sample_keys = sorted({k for r in sample_rows for k in r.keys()})
-    statuses = sorted({(r.get("asistencia") or r.get("tipoasistencia") or r.get("estado") or r.get("descripcion") or "").strip() for r in sample_rows if r})
+    statuses = sorted({(r.get("status") or "").strip() for r in sample_rows if r})
     return {
         "sessions_count": len(sessions),
         "sample_session_id": sid,
@@ -654,7 +726,6 @@ def inspect_attendance_source(year: int, session_limit: int = 10, sample_limit: 
         "sample_status_values": [s for s in statuses if s],
         "sample_rows": sample_rows,
     }
-
 
 def build_deputy_profiles(
     enrich_profile_page: bool = False,
