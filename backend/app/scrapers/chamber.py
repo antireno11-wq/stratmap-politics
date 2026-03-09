@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import html
 import re
 import unicodedata
 from collections import defaultdict
@@ -621,47 +622,61 @@ def fetch_attendance_by_deputy(
 
 def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
     sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
-    root = ET.fromstring(sessions_xml)
+    session_records = _records_from_xml(sessions_xml)
 
     sessions: List[Dict[str, Any]] = []
-    for sesion_node in _find_all(root, "Sesion"):
+    for row in session_records:
         session_id = _to_int(
-            _text(_find_child(sesion_node, "Id")),
+            _first_present(
+                row,
+                ["sesid", "ses_id", "idsesion", "id_sesion", "sesionid", "sessionid", "id"],
+            ),
             -1,
         )
         if session_id <= 0:
             continue
 
-        estado = _normalize_text(_text(_find_child(sesion_node, "Estado")))
+        estado = _normalize_text(_first_present(row, ["estado"]))
         if estado and "celebrada" not in estado:
             continue
 
         fecha = _to_date(
-            _text(_find_child(sesion_node, "FechaInicio"))
-            or _text(_find_child(sesion_node, "Fecha"))
+            _first_present(
+                row,
+                ["fechainicio", "fecha_inicio", "fecha", "f_sesion", "fecha_sesion", "sesfecha"],
+            )
         )
         sessions.append({"session_id": session_id, "fecha": fecha})
 
+    # Fallback robusto: parsea hojas XML por nombre de tag y texto escapado
     if not sessions:
-        session_records = _records_from_xml(sessions_xml)
-        for row in session_records:
-            session_id = _to_int(_first_present(row, ["sesid", "ses_id", "idsesion", "sesionid", "id"]), -1)
-            if session_id <= 0:
-                continue
+        try:
+            root = ET.fromstring(sessions_xml)
+            for el in root.iter():
+                if len(list(el)) != 0:
+                    continue
+                key = _local_name(el.tag).lower()
+                value = (el.text or "").strip()
+                if not value:
+                    continue
+                if ("ses" in key and "id" in key) or key in {"idsesion", "id_sesion", "sesionid", "sessionid"}:
+                    sid = _to_int(value, -1)
+                    if sid > 0:
+                        sessions.append({"session_id": sid, "fecha": None})
+        except Exception:
+            pass
 
-            estado = _normalize_text(_first_present(row, ["estado"]))
-            if estado and "celebrada" not in estado:
-                continue
+    if not sessions:
+        try:
+            raw = html.unescape(sessions_xml.decode("utf-8", errors="ignore"))
+            for m in re.finditer(r"<(?:sesid|ses_id|idsesion|id_sesion|sesionid|sessionid)>\s*(\d+)\s*</", raw, re.IGNORECASE):
+                sid = _to_int(m.group(1), -1)
+                if sid > 0:
+                    sessions.append({"session_id": sid, "fecha": None})
+        except Exception:
+            pass
 
-            fecha = _to_date(
-                _first_present(
-                    row,
-                    ["fechainicio", "fecha_inicio", "fecha", "f_sesion", "fecha_sesion", "sesfecha"],
-                )
-            )
-            sessions.append({"session_id": session_id, "fecha": fecha})
-
-    dedup = {s["session_id"]: s for s in sessions}
+    dedup = {s["session_id"]: s for s in sessions if s.get("session_id", 0) > 0}
     ordered = sorted(dedup.values(), key=lambda x: x["session_id"], reverse=True)
     return ordered[: max(1, limit)]
 
