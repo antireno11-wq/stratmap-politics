@@ -231,13 +231,55 @@ def _attendance_status_is_absent(status: str) -> bool:
 
 def _normalize_attendance_state(status: str) -> str:
     t = _normalize_text(status)
+    if not t:
+        return "desconocido"
     if "pareo" in t:
         return "pareo"
-    if "permiso" in t:
+    if "permiso" in t or "licencia" in t or "impedido" in t:
         return "permiso"
     if _attendance_status_is_absent(t):
         return "ausente"
-    return "presente"
+    if any(x in t for x in ["presente", "asiste", "asistio", "asistencia completa"]):
+        return "presente"
+    return "desconocido"
+
+
+def _looks_like_admin_attendance_label(name: str) -> bool:
+    t = _normalize_text(name)
+    blocked_tokens = [
+        "art.",
+        "codigo del trabajo",
+        "comites parlamentarios",
+        "permiso",
+        "licencia",
+        "impedimento",
+        "desafuero",
+        "salida del pais",
+        "mision oficial",
+        "actividad oficial",
+        "actividad propia",
+        "acuerdo de comites",
+        "fallecimiento",
+        "postnatal",
+        "prenatal",
+        "labor parlamentaria",
+    ]
+    return any(tok in t for tok in blocked_tokens)
+
+
+def _clean_person_name(name: str) -> str:
+    raw = re.sub(r"\s+", " ", (name or "").strip())
+    return raw.strip(" -")
+
+
+def _build_valid_deputy_name_set() -> set[str]:
+    deputies = fetch_deputies_periodo_actual(enrich_profile_page=False)
+    out: set[str] = set()
+    for d in deputies:
+        n = _clean_person_name(d.get("nombre", ""))
+        if n:
+            out.add(_normalize_text(n))
+    return out
 
 
 def fetch_deputies_periodo_actual(
@@ -484,6 +526,7 @@ def fetch_attendance_by_deputy(
         all_sessions.extend([s["session_id"] for s in sessions])
     session_ids = sorted(set(all_sessions), reverse=True)
 
+    valid_names = _build_valid_deputy_name_set()
     stats_by_id: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
     stats_by_name: Dict[str, Dict[str, int]] = defaultdict(lambda: {"present": 0, "absent": 0, "total": 0})
 
@@ -498,29 +541,35 @@ def fetch_attendance_by_deputy(
                     ["dipid", "dip_id", "iddiputado", "diputadoid", "idparlamentario", "id"],
                 )
             )
-            nombre = _compose_full_name(row) or _first_present(
+            nombre_raw = _compose_full_name(row) or _first_present(
                 row, ["nombre", "dipnombre", "nombreparlamentario", "parlamentario", "nombres"]
             )
+            nombre = _clean_person_name(nombre_raw)
             nombre_norm = _normalize_text(nombre)
-            status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
-            if not external_id and not nombre_norm:
+            if not nombre_norm:
+                continue
+            if _looks_like_admin_attendance_label(nombre):
+                continue
+            if nombre_norm not in valid_names:
                 continue
 
-            targets: List[Dict[str, Dict[str, int]]] = []
-            target_keys: List[str] = []
-            if external_id:
-                targets.append(stats_by_id)
-                target_keys.append(external_id)
-            if nombre_norm:
-                targets.append(stats_by_name)
-                target_keys.append(nombre_norm)
+            status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
+            estado = _normalize_attendance_state(status)
+            if estado == "desconocido":
+                continue
 
-            for t, k in zip(targets, target_keys):
-                t[k]["total"] += 1
-                if _attendance_status_is_absent(status):
-                    t[k]["absent"] += 1
+            if external_id:
+                stats_by_id[external_id]["total"] += 1
+                if estado == "presente":
+                    stats_by_id[external_id]["present"] += 1
                 else:
-                    t[k]["present"] += 1
+                    stats_by_id[external_id]["absent"] += 1
+
+            stats_by_name[nombre_norm]["total"] += 1
+            if estado == "presente":
+                stats_by_name[nombre_norm]["present"] += 1
+            else:
+                stats_by_name[nombre_norm]["absent"] += 1
 
     return dict(stats_by_id), dict(stats_by_name)
 
@@ -547,6 +596,7 @@ def scrape_attendance_rows(from_year: int, to_year: int, session_limit_per_year:
     for year in range(from_year, to_year + 1):
         sessions.extend(fetch_sessions(year=year, limit=session_limit_per_year))
     sessions = sorted({s["session_id"]: s for s in sessions}.values(), key=lambda x: x["session_id"], reverse=True)
+    valid_names = _build_valid_deputy_name_set()
     out: List[Dict[str, Any]] = []
 
     for session in sessions:
@@ -556,18 +606,30 @@ def scrape_attendance_rows(from_year: int, to_year: int, session_limit_per_year:
         attendance_records = _records_from_xml(xml)
 
         for row in attendance_records:
-            nombre = _compose_full_name(row) or _first_present(
+            nombre_raw = _compose_full_name(row) or _first_present(
                 row, ["nombre", "dipnombre", "nombreparlamentario", "parlamentario", "nombres"]
             )
+            nombre = _clean_person_name(nombre_raw)
             if not nombre:
                 continue
+            if _looks_like_admin_attendance_label(nombre):
+                continue
+
+            nombre_norm = _normalize_text(nombre)
+            if nombre_norm not in valid_names:
+                continue
+
             status = _first_present(row, ["asistencia", "tipoasistencia", "estado", "descripcion"]) or ""
+            estado = _normalize_attendance_state(status)
+            if estado == "desconocido":
+                continue
+
             out.append(
                 {
                     "session_id": sid,
                     "fecha": fecha,
-                    "diputado_nombre": nombre.strip(),
-                    "estado": _normalize_attendance_state(status),
+                    "diputado_nombre": nombre,
+                    "estado": estado,
                 }
             )
 
