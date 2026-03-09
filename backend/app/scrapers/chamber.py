@@ -402,8 +402,10 @@ def fetch_deputies_periodo_actual(
 
     for d in enrich_targets:
         needs_geo = _is_missing(d.get("distrito_circunscripcion")) or _is_missing(d.get("region"))
-        api_extra = fetch_deputy_detail(d["external_id"]) if (needs_geo or _is_missing(d.get("partido"))) else None
-        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"]) if enrich_profile_page else None
+        needs_party = _is_missing(d.get("partido"))
+
+        # retornarDiputado ya no trae territorio de forma consistente; usamos API solo para partido faltante.
+        api_extra = fetch_deputy_detail(d["external_id"]) if needs_party else None
 
         if api_extra:
             if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(api_extra.get("distrito_circunscripcion")):
@@ -412,6 +414,14 @@ def fetch_deputies_periodo_actual(
                 d["region"] = api_extra["region"]
             if _is_missing(d.get("partido")) and not _is_missing(api_extra.get("partido")):
                 d["partido"] = api_extra["partido"]
+
+        needs_page_fallback = (
+            enrich_profile_page
+            or _is_missing(d.get("distrito_circunscripcion"))
+            or _is_missing(d.get("region"))
+            or _is_missing(d.get("partido"))
+        )
+        page_extra = fetch_deputy_detail_from_profile_page(d["external_id"]) if needs_page_fallback else None
 
         if page_extra:
             if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(page_extra.get("distrito_circunscripcion")):
@@ -428,10 +438,15 @@ def fetch_deputies_periodo_actual(
 
 
 def fetch_deputy_detail(external_id: str) -> Optional[Dict[str, str]]:
-    try:
-        xml = _request_xml("WSDiputado.asmx/retornarDiputado", params={"prmDipId": external_id})
-        root = ET.fromstring(xml)
-    except Exception:
+    root: Optional[ET.Element] = None
+    for params in ({"prmDiputadoId": external_id}, {"prmDipId": external_id}):
+        try:
+            xml = _request_xml("WSDiputado.asmx/retornarDiputado", params=params)
+            root = ET.fromstring(xml)
+            break
+        except Exception:
+            continue
+    if root is None:
         return None
 
     distrito = "Sin dato"
@@ -479,33 +494,33 @@ def fetch_deputy_detail_from_profile_page(external_id: str) -> Optional[Dict[str
     periodo = f"{datetime.now().year}-ACTUAL"
     asistencia_pct: Optional[float] = None
 
-    district_match = re.search(r"Distrito\\s*(?:N[°º]\\s*)?(\\d{1,2})", text, re.IGNORECASE)
+    district_match = re.search(r"Distrito\s*:?\s*(?:N[°º]\s*)?(\d{1,2})", text, re.IGNORECASE)
     if district_match:
         distrito = f"Distrito {district_match.group(1)}"
 
     region_match = re.search(
-        r"Regi[oó]n\\s*[:\\-]?\\s*([A-Za-zÁÉÍÓÚÑáéíóúüÜ'()\\-\\s]{4,80})",
+        r"Regi[oó]n\s*[:\-]?\s*([A-Za-zÁÉÍÓÚÑáéíóúüÜ'()\-\s]{4,80})",
         text,
         re.IGNORECASE,
     )
     if region_match:
-        region_raw = re.sub(r"\\s+", " ", region_match.group(1)).strip(" -")
+        region_raw = re.sub(r"\s+", " ", region_match.group(1)).strip(" -")
         region_raw = re.split(r"(Comisi[oó]n|Partido|Per[ií]odo|Asistencia)", region_raw, maxsplit=1)[0].strip(" -")
         if region_raw:
             region = region_raw
 
-    party_match = re.search(r"Partido\\s*:\\s*(.+?)\\s+Bancada\\s*:", text, re.IGNORECASE)
+    party_match = re.search(r"Partido\s*:\s*(.+?)(?:\s+Bancada\s*:|\s+Comit[eé]\s+Parlamentario\s*:)", text, re.IGNORECASE)
     if party_match:
-        party_raw = re.sub(r"\\s+", " ", party_match.group(1)).strip(" -")
+        party_raw = re.sub(r"\s+", " ", party_match.group(1)).strip(" -")
         if party_raw:
             partido = party_raw
 
-    periodo_match = re.search(r"Per[ií]odo\\s*:\\s*([0-9]{4}\\s*[-–]\\s*[0-9]{4})", text, re.IGNORECASE)
+    periodo_match = re.search(r"Per[ií]odo\s*:\s*([0-9]{4}\s*[-–]\s*[0-9]{4})", text, re.IGNORECASE)
     if periodo_match:
         periodo = periodo_match.group(1).replace("–", "-").replace(" ", "")
 
     asistencia_match = re.search(
-        r"Porcentaje de Asistencia\\s*([0-9]+(?:[\\.,][0-9]+)?)%",
+        r"Porcentaje de Asistencia\s*([0-9]+(?:[\.,][0-9]+)?)%",
         text,
         re.IGNORECASE,
     )

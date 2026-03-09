@@ -105,6 +105,7 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
       </section>
 
       <section className="card table-card">
+        <p className="profile-meta">Haz clic en el nombre para abrir la ficha completa del parlamentario.</p>
         <div className="table-wrap">
           <table>
             <thead>
@@ -123,7 +124,7 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
               {sortedRows.map((row: any) => (
                 <tr key={row.id}>
                   <td className={`score ${scoreTier(row.score)}`}>{row.score.toFixed(2)}</td>
-                  <td className="row-name"><Link href={`/parliamentarians/${row.id}`}>{row.nombre}</Link></td>
+                  <td className="row-name"><Link href={`/parliamentarians/${row.id}`} title="Ver ficha completa">{row.nombre}</Link></td>
                   <td><span className="chamber-pill">{row.camara}</span></td>
                   <td>{row.partido}</td>
                   <td>{row.distrito_circunscripcion}</td>

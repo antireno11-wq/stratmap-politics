@@ -314,3 +314,29 @@ th {
     height: 82px;
   }
 }
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.6rem;
+}
+
+.detail-item {
+  border: 1px solid #d0d5dd;
+  border-radius: 10px;
+  padding: 0.65rem 0.72rem;
+  background: #fcfdff;
+}
+
+.detail-label {
+  font-size: 0.78rem;
+  color: #475467;
+}
+
+.detail-value {
+  margin-top: 0.2rem;
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: #111827;
+  word-break: break-word;
+}
