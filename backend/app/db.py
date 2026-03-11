@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import unicodedata
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg
@@ -317,7 +318,7 @@ def _normalize_person_name(name: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def _current_role_rank(row: Dict[str, Any]) -> Tuple[int, int, int, float, int, float]:
+def _current_role_rank(row: Dict[str, Any]) -> Tuple[float, int, int, int, int, float]:
     party = str(row.get("partido") or "").strip().lower()
     region = str(row.get("region") or "").strip().lower()
     district = str(row.get("distrito_circunscripcion") or "").strip().lower()
@@ -339,17 +340,25 @@ def _current_role_rank(row: Dict[str, Any]) -> Tuple[int, int, int, float, int, 
     suspicious_zero = 1 if total > 0 and absent >= total and pct <= 0 else 0
 
     updated = row.get("updated_at")
-    updated_ts = float(updated.timestamp()) if hasattr(updated, "timestamp") else 0.0
+    if hasattr(updated, "timestamp"):
+        updated_ts = float(updated.timestamp())
+    elif isinstance(updated, str):
+        try:
+            updated_ts = float(datetime.fromisoformat(updated.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            updated_ts = 0.0
+    else:
+        updated_ts = 0.0
 
-    # Prioriza ficha con mejor señal de actividad real para evitar mostrar
-    # duplicados cruzados de cámara con 0/total cuando hay ficha activa previa.
+    # Prioriza el registro más reciente para reflejar el cargo vigente.
+    # Si hay empate temporal, usa cobertura y consistencia de asistencia.
     return (
-        has_positive_attendance,
+        updated_ts,
+        coverage,
         has_attendance,
         -suspicious_zero,
+        has_positive_attendance,
         pct,
-        coverage,
-        updated_ts,
     )
 
 
