@@ -408,7 +408,7 @@ th {
   background: linear-gradient(90deg, #1e40af 0%, #2563eb 100%);
 }
 
-.score-segment-cov {
+.score-segment-com {
   background: linear-gradient(90deg, #0f766e 0%, #14b8a6 100%);
 }
 
@@ -442,7 +442,7 @@ th {
   background: #2563eb;
 }
 
-.legend-dot.cov {
+.legend-dot.com {
   background: #14b8a6;
 }
 

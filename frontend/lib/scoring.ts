@@ -1,24 +1,39 @@
 export function computeTransparencyScore(item: {
   asistencia_pct?: number | null;
-  sesiones_totales?: number | null;
-  sesiones_ausentes?: number | null;
-  partido?: string | null;
-  distrito_circunscripcion?: string | null;
-  region?: string | null;
+  committee_score?: number | null;
 }): number {
-  const asistencia = item.asistencia_pct == null ? 0 : Number(item.asistencia_pct);
-  const attendanceScore = Math.max(0, Math.min(100, asistencia));
+  return computePublicScoreBreakdown(item).total_score;
+}
 
-  const hasParty = !!item.partido && item.partido !== "Sin dato";
-  const hasDistrict = !!item.distrito_circunscripcion && item.distrito_circunscripcion !== "Sin dato";
-  const hasRegion = !!item.region && item.region !== "Sin dato";
-  const hasSessions = item.sesiones_totales != null && item.sesiones_ausentes != null;
+export function computePublicScoreBreakdown(item: {
+  asistencia_pct?: number | null;
+  committee_score?: number | null;
+}) {
+  const attendanceScore = Math.max(0, Math.min(100, Number(item.asistencia_pct ?? 0)));
+  const committeeRaw = item.committee_score == null ? null : Number(item.committee_score);
+  const committeeScore = committeeRaw == null || Number.isNaN(committeeRaw)
+    ? null
+    : Math.max(0, Math.min(100, committeeRaw));
 
-  const coverageRaw = [hasParty, hasDistrict, hasRegion, hasSessions].filter(Boolean).length;
-  const coverageScore = (coverageRaw / 4) * 100;
+  // Mientras no exista score de comisiones para todos, evitamos castigar con cero:
+  // si no hay dato de comisiones, el score se apoya en asistencia.
+  const hasCommitteeScore = committeeScore != null;
+  const attendanceWeight = hasCommitteeScore ? 0.6 : 1.0;
+  const committeeWeight = hasCommitteeScore ? 0.4 : 0.0;
 
-  const total = (attendanceScore * 0.8) + (coverageScore * 0.2);
-  return Math.round(total * 100) / 100;
+  const weightedAttendance = attendanceScore * attendanceWeight;
+  const weightedCommittee = (committeeScore ?? 0) * committeeWeight;
+  const total = weightedAttendance + weightedCommittee;
+
+  return {
+    attendance_score: Math.round(attendanceScore * 100) / 100,
+    committee_score: committeeScore == null ? null : Math.round(committeeScore * 100) / 100,
+    attendance_weight: attendanceWeight,
+    committee_weight: committeeWeight,
+    weighted_attendance: Math.round(weightedAttendance * 100) / 100,
+    weighted_committee: Math.round(weightedCommittee * 100) / 100,
+    total_score: Math.round(total * 100) / 100,
+  };
 }
 
 export function scoreTier(score: number): "alto" | "medio" | "bajo" {

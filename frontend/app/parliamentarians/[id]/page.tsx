@@ -1,17 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { getParliamentarian } from "../../../lib/api";
-import { computeTransparencyScore, scoreTier } from "../../../lib/scoring";
-
-function dataCoverage(p: any) {
-  const checks = [
-    p.partido && p.partido !== "Sin dato",
-    p.region && p.region !== "Sin dato",
-    p.distrito_circunscripcion && p.distrito_circunscripcion !== "Sin dato",
-    p.sesiones_totales != null && p.sesiones_ausentes != null,
-  ];
-  return (checks.filter(Boolean).length / checks.length) * 100;
-}
+import { computePublicScoreBreakdown, scoreTier } from "../../../lib/scoring";
 
 function safeValue(value: any) {
   if (value == null) return "N/D";
@@ -38,29 +28,23 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
   const data = await getParliamentarian(params.id);
   const p = data.parlamentario;
 
-  const score = computeTransparencyScore(p);
-  const coverage = dataCoverage(p);
-  const attendance = Number(p.asistencia_pct ?? 0);
+  const scoreBreakdown = computePublicScoreBreakdown(p);
+  const score = scoreBreakdown.total_score;
+  const attendance = scoreBreakdown.attendance_score;
+  const committeeScore = scoreBreakdown.committee_score;
   const attended =
     p.sesiones_totales == null || p.sesiones_ausentes == null
       ? null
       : p.sesiones_totales - p.sesiones_ausentes;
 
-  const hasParty = safeValue(p.partido) !== "Sin dato";
   const hasRegion = safeValue(p.region) !== "Sin dato";
   const hasDistrict = safeValue(p.distrito_circunscripcion) !== "Sin dato";
-  const hasSessions = p.sesiones_totales != null && p.sesiones_ausentes != null;
 
   const territoryReady = hasRegion && hasDistrict;
-  const weightedAttendance = Math.round(attendance * 0.8 * 100) / 100;
-  const weightedCoverage = Math.round(coverage * 0.2 * 100) / 100;
-
-  const coverageItems = [
-    { label: "Partido informado", ok: hasParty },
-    { label: "Región informada", ok: hasRegion },
-    { label: "Distrito/Circ. informado", ok: hasDistrict },
-    { label: "Sesiones cargadas", ok: hasSessions },
-  ];
+  const weightedAttendance = scoreBreakdown.weighted_attendance;
+  const weightedCommittee = scoreBreakdown.weighted_committee;
+  const attendanceWeightLabel = Math.round(scoreBreakdown.attendance_weight * 100);
+  const committeeWeightLabel = Math.round(scoreBreakdown.committee_weight * 100);
 
   return (
     <main>
@@ -104,10 +88,10 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
         </article>
 
         <article className="metric-box">
-          <div className="metric-label">Cobertura de datos</div>
-          <div className="metric-value">{coverage.toFixed(2)}%</div>
+          <div className="metric-label">Score comisiones</div>
+          <div className="metric-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(2)}</div>
           <div className="progress">
-            <span style={{ width: `${coverage}%` }} />
+            <span style={{ width: `${Math.max(0, Math.min(100, committeeScore ?? 0))}%` }} />
           </div>
         </article>
 
@@ -132,8 +116,9 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
       <section className="card score-breakdown-card">
         <h3 className="filter-title">Cómo Se Calcula El Score</h3>
         <p className="score-explainer">
-          Score final = Asistencia x 0.80 + Cobertura de datos x 0.20. La cobertura mide si hay partido,
-          región, distrito/circunscripción y sesiones informadas.
+          {committeeScore == null
+            ? "Score final = Asistencia x 1.00. Aun no hay score de comisiones disponible para este caso."
+            : `Score final = Asistencia x ${scoreBreakdown.attendance_weight.toFixed(2)} + Comisiones x ${scoreBreakdown.committee_weight.toFixed(2)}.`}
         </p>
 
         <div className="score-rings">
@@ -154,10 +139,10 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             </div>
           </div>
           <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(coverage, "#14b8a6")}>
+            <div className="score-ring" style={ringStyle(committeeScore ?? 0, "#14b8a6")}>
               <div className="score-ring-inner">
-                <div className="score-ring-value">{coverage.toFixed(1)}</div>
-                <div className="score-ring-caption">Cobertura</div>
+                <div className="score-ring-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(1)}</div>
+                <div className="score-ring-caption">Comisiones</div>
               </div>
             </div>
           </div>
@@ -166,30 +151,22 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
         <div className="score-stack-block">
           <div className="score-stack-track">
             <span className="score-segment-att" style={{ width: `${Math.max(0, Math.min(100, weightedAttendance))}%` }} />
-            <span className="score-segment-cov" style={{ width: `${Math.max(0, Math.min(100, weightedCoverage))}%` }} />
+            <span className="score-segment-com" style={{ width: `${Math.max(0, Math.min(100, weightedCommittee))}%` }} />
           </div>
           <div className="score-legend-grid">
             <div className="score-legend-item">
               <span className="legend-dot att" />
-              <span>Aporte Asistencia (80%): {weightedAttendance.toFixed(2)}</span>
+              <span>Aporte Asistencia ({attendanceWeightLabel}%): {weightedAttendance.toFixed(2)}</span>
             </div>
             <div className="score-legend-item">
-              <span className="legend-dot cov" />
-              <span>Aporte Cobertura (20%): {weightedCoverage.toFixed(2)}</span>
+              <span className="legend-dot com" />
+              <span>Aporte Comisiones ({committeeWeightLabel}%): {weightedCommittee.toFixed(2)}</span>
             </div>
             <div className="score-legend-item total">
               <span className="legend-dot total" />
               <span>Total score: {score.toFixed(2)}</span>
             </div>
           </div>
-        </div>
-
-        <div className="coverage-grid">
-          {coverageItems.map((item) => (
-            <div key={item.label} className={`coverage-chip ${item.ok ? "ok" : "missing"}`}>
-              {item.ok ? "OK" : "Falta"} · {item.label}
-            </div>
-          ))}
         </div>
       </section>
 
@@ -241,25 +218,25 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             <div className="score-bar-value">{p.asistencia_pct == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
           </div>
           <div className="score-bar-row">
-            <div className="score-bar-label">Cobertura de datos</div>
+            <div className="score-bar-label">Score comisiones</div>
             <div className="score-bar-track">
-              <span style={{ width: `${coverage}%` }} />
+              <span style={{ width: `${Math.max(0, Math.min(100, committeeScore ?? 0))}%` }} />
             </div>
-            <div className="score-bar-value">{coverage.toFixed(2)}%</div>
+            <div className="score-bar-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(2)}</div>
           </div>
           <div className="score-bar-row">
-            <div className="score-bar-label">Aporte asistencia (0-80)</div>
+            <div className="score-bar-label">Aporte asistencia</div>
             <div className="score-bar-track">
               <span style={{ width: `${Math.max(0, Math.min(100, weightedAttendance))}%` }} />
             </div>
             <div className="score-bar-value">{weightedAttendance.toFixed(2)}</div>
           </div>
           <div className="score-bar-row">
-            <div className="score-bar-label">Aporte cobertura (0-20)</div>
+            <div className="score-bar-label">Aporte comisiones</div>
             <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, weightedCoverage))}%` }} />
+              <span style={{ width: `${Math.max(0, Math.min(100, weightedCommittee))}%` }} />
             </div>
-            <div className="score-bar-value">{weightedCoverage.toFixed(2)}</div>
+            <div className="score-bar-value">{weightedCommittee.toFixed(2)}</div>
           </div>
         </div>
       </section>
