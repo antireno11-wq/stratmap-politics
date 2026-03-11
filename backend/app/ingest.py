@@ -25,6 +25,16 @@ def ingest_deputies_from_chamber(
         enrich_limit=enrich_limit,
         include_attendance=include_attendance,
     )
+
+    # En enriquecimiento por lotes, solo persistimos el tramo pedido.
+    # Si se upsert-ean los 157 en cada batch, los lotes siguientes vuelven a
+    # sobrescribir con "Sin dato" a los enriquecidos previamente.
+    is_batch_enrich = enrich_profile_page and enrich_limit > 0
+    if is_batch_enrich:
+        start = max(0, enrich_offset)
+        end = start + max(1, enrich_limit)
+        items = items[start:end]
+
     summary = quality_summary(items)
     # Gate de calidad para no sobreescribir con datos vacíos.
     if summary["total"] > 0:
@@ -39,7 +49,6 @@ def ingest_deputies_from_chamber(
                 "with_territory": summary["with_territory"],
             }
     # Si estamos enriqueciendo por lotes, no borrar la tabla completa.
-    is_batch_enrich = enrich_profile_page and enrich_limit > 0
     if is_batch_enrich or not include_attendance:
         processed = upsert_parliamentarians(camara="DIPUTADO", items=items, source="camara.opendata")
     else:
