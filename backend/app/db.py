@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg
@@ -249,6 +251,7 @@ def list_parliamentarians(
     q: Optional[str] = None,
     partido: Optional[str] = None,
     region: Optional[str] = None,
+    unique_people: bool = True,
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
@@ -268,6 +271,11 @@ def list_parliamentarians(
         params["region"] = f"%{region}%"
 
     where_sql = "" if not where else "WHERE " + " AND ".join(where)
+    sql_limit = params["limit"]
+    if unique_people and not camara:
+        sql_limit = min(1000, max(params["limit"] * 3, params["limit"] + 50))
+    params["sql_limit"] = sql_limit
+
     sql = f"""
     SELECT
       p.id,
@@ -286,7 +294,7 @@ def list_parliamentarians(
     FROM parlamentarios p
     {where_sql}
     ORDER BY p.camara ASC, p.nombre ASC
-    LIMIT %(limit)s;
+    LIMIT %(sql_limit)s;
     """
 
     with get_conn() as conn:
@@ -294,7 +302,74 @@ def list_parliamentarians(
             cur.execute(sql, params)
             rows = cur.fetchall()
 
-    return [dict(r) for r in rows]
+    out = [dict(r) for r in rows]
+
+    if unique_people and not camara:
+        out = _dedup_by_current_role(out)
+
+    return out[: params["limit"]]
+
+
+def _normalize_person_name(name: str) -> str:
+    text = unicodedata.normalize("NFD", str(name or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-zA-Z0-9]+", " ", text).strip().lower()
+    return re.sub(r"\s+", " ", text)
+
+
+def _current_role_rank(row: Dict[str, Any]) -> Tuple[int, int, int, float, int, float]:
+    party = str(row.get("partido") or "").strip().lower()
+    region = str(row.get("region") or "").strip().lower()
+    district = str(row.get("distrito_circunscripcion") or "").strip().lower()
+    has_party = 1 if party and party != "sin dato" else 0
+    has_region = 1 if region and region != "sin dato" else 0
+    has_district = 1 if district and district != "sin dato" else 0
+    coverage = has_party + has_region + has_district
+
+    pct_raw = row.get("asistencia_pct")
+    total_raw = row.get("sesiones_totales")
+    absent_raw = row.get("sesiones_ausentes")
+
+    pct = float(pct_raw) if pct_raw is not None else -1.0
+    total = int(total_raw) if total_raw is not None else -1
+    absent = int(absent_raw) if absent_raw is not None else -1
+
+    has_attendance = 1 if pct_raw is not None and total_raw is not None else 0
+    has_positive_attendance = 1 if pct > 0 else 0
+    suspicious_zero = 1 if total > 0 and absent >= total and pct <= 0 else 0
+
+    updated = row.get("updated_at")
+    updated_ts = float(updated.timestamp()) if hasattr(updated, "timestamp") else 0.0
+
+    # Prioriza ficha con mejor señal de actividad real para evitar mostrar
+    # duplicados cruzados de cámara con 0/total cuando hay ficha activa previa.
+    return (
+        has_positive_attendance,
+        has_attendance,
+        -suspicious_zero,
+        pct,
+        coverage,
+        updated_ts,
+    )
+
+
+def _dedup_by_current_role(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_name: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        key = _normalize_person_name(str(row.get("nombre") or ""))
+        if not key:
+            key = f"id-{row.get('id')}"
+        by_name.setdefault(key, []).append(row)
+
+    selected: List[Dict[str, Any]] = []
+    for candidates in by_name.values():
+        if len(candidates) == 1:
+            selected.append(candidates[0])
+            continue
+        selected.append(max(candidates, key=_current_role_rank))
+
+    selected.sort(key=lambda r: (str(r.get("camara") or ""), str(r.get("nombre") or "")))
+    return selected
 
 
 def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:

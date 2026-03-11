@@ -264,9 +264,17 @@ def parliamentarians(
     q: Optional[str] = Query(default=None),
     partido: Optional[str] = Query(default=None),
     region: Optional[str] = Query(default=None),
+    unique_people: bool = Query(default=True),
     limit: int = Query(default=1000, ge=1, le=1000),
 ) -> dict:
-    rows = list_parliamentarians(camara=camara, q=q, partido=partido, region=region, limit=limit)
+    rows = list_parliamentarians(
+        camara=camara,
+        q=q,
+        partido=partido,
+        region=region,
+        unique_people=unique_people,
+        limit=limit,
+    )
     counters = count_by_camara()
     return {
         "items": rows,
