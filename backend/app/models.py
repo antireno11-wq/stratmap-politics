@@ -12,6 +12,8 @@ class ParliamentarianIn(BaseModel):
     distrito_circunscripcion: Optional[str] = "Sin dato"
     region: Optional[str] = "Sin dato"
     periodo: Optional[str] = "Sin dato"
+    biografia: Optional[str] = None
+    biografia_url: Optional[str] = None
     asistencia_pct: Optional[float] = None
     sesiones_totales: Optional[int] = None
     sesiones_ausentes: Optional[int] = None

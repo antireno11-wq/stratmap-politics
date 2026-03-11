@@ -34,6 +34,8 @@ def init_db() -> None:
         distrito_circunscripcion TEXT NOT NULL DEFAULT 'Sin dato',
         region TEXT NOT NULL DEFAULT 'Sin dato',
         periodo TEXT NOT NULL DEFAULT 'Sin dato',
+        biografia TEXT NULL,
+        biografia_url TEXT NULL,
         source TEXT NOT NULL DEFAULT 'manual',
         asistencia_pct NUMERIC(5,2) NULL,
         sesiones_totales INTEGER NULL,
@@ -78,6 +80,8 @@ def init_db() -> None:
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS asistencia_pct NUMERIC(5,2) NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS sesiones_totales INTEGER NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS sesiones_ausentes INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS biografia TEXT NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS biografia_url TEXT NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_memberships_json JSONB NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_sessions_attended INTEGER NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_total_sessions INTEGER NULL;")
@@ -252,12 +256,14 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
     insert_sql = """
     INSERT INTO parlamentarios (
       camara, external_id, nombre, partido, distrito_circunscripcion,
+      biografia, biografia_url,
       region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes,
       committee_memberships_json, committee_sessions_attended, committee_total_sessions, committee_count,
       committee_activity_bills_discussed, committee_activity_bills_sponsored, committee_activity_interventions,
       committee_topic_counts, committee_score, committee_score_breakdown, updated_at
     ) VALUES (
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
+      %(biografia)s, %(biografia_url)s,
       %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s,
       %(committee_memberships_json)s::jsonb, %(committee_sessions_attended)s, %(committee_total_sessions)s, %(committee_count)s,
       %(committee_activity_bills_discussed)s, %(committee_activity_bills_sponsored)s, %(committee_activity_interventions)s,
@@ -267,6 +273,8 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       nombre = EXCLUDED.nombre,
       partido = EXCLUDED.partido,
       distrito_circunscripcion = EXCLUDED.distrito_circunscripcion,
+      biografia = COALESCE(EXCLUDED.biografia, parlamentarios.biografia),
+      biografia_url = COALESCE(EXCLUDED.biografia_url, parlamentarios.biografia_url),
       region = EXCLUDED.region,
       periodo = EXCLUDED.periodo,
       source = EXCLUDED.source,
@@ -308,6 +316,8 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
                         or "Sin dato"
                     ).strip()
                     or "Sin dato",
+                    "biografia": str(item.get("biografia")).strip() if item.get("biografia") else None,
+                    "biografia_url": str(item.get("biografia_url")).strip() if item.get("biografia_url") else None,
                     "region": str(item.get("region") or "Sin dato").strip() or "Sin dato",
                     "periodo": str(item.get("periodo") or "Sin dato").strip() or "Sin dato",
                     "source": source,
@@ -360,12 +370,14 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
     sql = """
     INSERT INTO parlamentarios (
       camara, external_id, nombre, partido, distrito_circunscripcion,
+      biografia, biografia_url,
       region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes,
       committee_memberships_json, committee_sessions_attended, committee_total_sessions, committee_count,
       committee_activity_bills_discussed, committee_activity_bills_sponsored, committee_activity_interventions,
       committee_topic_counts, committee_score, committee_score_breakdown, updated_at
     ) VALUES (
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
+      %(biografia)s, %(biografia_url)s,
       %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s,
       %(committee_memberships_json)s::jsonb, %(committee_sessions_attended)s, %(committee_total_sessions)s, %(committee_count)s,
       %(committee_activity_bills_discussed)s, %(committee_activity_bills_sponsored)s, %(committee_activity_interventions)s,
@@ -375,6 +387,8 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       nombre = EXCLUDED.nombre,
       partido = EXCLUDED.partido,
       distrito_circunscripcion = EXCLUDED.distrito_circunscripcion,
+      biografia = COALESCE(EXCLUDED.biografia, parlamentarios.biografia),
+      biografia_url = COALESCE(EXCLUDED.biografia_url, parlamentarios.biografia_url),
       region = EXCLUDED.region,
       periodo = EXCLUDED.periodo,
       source = EXCLUDED.source,
@@ -411,6 +425,8 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
                         or "Sin dato"
                     ).strip()
                     or "Sin dato",
+                    "biografia": str(item.get("biografia")).strip() if item.get("biografia") else None,
+                    "biografia_url": str(item.get("biografia_url")).strip() if item.get("biografia_url") else None,
                     "region": str(item.get("region") or "Sin dato").strip() or "Sin dato",
                     "periodo": str(item.get("periodo") or "Sin dato").strip() or "Sin dato",
                     "source": source,
@@ -578,7 +594,7 @@ def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:
     sql = """
     SELECT
       id, camara, external_id, nombre, partido, distrito_circunscripcion,
-      region, periodo, asistencia_pct::float AS asistencia_pct,
+      biografia, biografia_url, region, periodo, asistencia_pct::float AS asistencia_pct,
       sesiones_totales, sesiones_ausentes,
       committee_memberships_json AS committee_memberships,
       committee_sessions_attended, committee_total_sessions, committee_count,

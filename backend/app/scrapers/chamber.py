@@ -39,6 +39,19 @@ def _empty_committee_fields() -> Dict[str, Any]:
     }
 
 
+def _default_bio(camara: str, nombre: str, partido: str, territorio: str, region: str, periodo: str) -> str:
+    party = partido if not _is_missing(partido) else "partido no informado"
+    territory = territorio if not _is_missing(territorio) else "territorio no informado"
+    reg = region if not _is_missing(region) else "region no informada"
+    per = periodo if not _is_missing(periodo) else "periodo no informado"
+    return (
+        f"{nombre} es {camara.lower()} en Chile. "
+        f"Militancia: {party}. "
+        f"Representa {territory} ({reg}). "
+        f"Periodo legislativo: {per}."
+    )
+
+
 def _local_name(tag: str) -> str:
     if "}" in tag:
         return tag.split("}", 1)[1]
@@ -418,6 +431,15 @@ def fetch_deputies_periodo_actual(
                 "distrito_circunscripcion": distrito,
                 "region": region,
                 "periodo": f"{datetime.now().year}-ACTUAL",
+                "biografia": _default_bio(
+                    camara="Diputado",
+                    nombre=nombre,
+                    partido=partido,
+                    territorio=distrito,
+                    region=region,
+                    periodo=f"{datetime.now().year}-ACTUAL",
+                ),
+                "biografia_url": f"{DEPUTY_PROFILE_URL}?prmId={external_id}",
                 **_empty_committee_fields(),
             }
         )
@@ -832,10 +854,21 @@ def build_deputy_profiles(
         pct_from_sessions = None if total == 0 else round((stats["present"] / total) * 100, 2)
         pct_from_profile = deputy.get("asistencia_pct")
         pct = pct_from_profile if pct_from_profile is not None else pct_from_sessions
+        biography = deputy.get("biografia") or _default_bio(
+            camara="Diputado",
+            nombre=deputy["nombre"],
+            partido=deputy.get("partido", "Sin dato"),
+            territorio=deputy.get("distrito_circunscripcion", "Sin dato"),
+            region=deputy.get("region", "Sin dato"),
+            periodo=deputy.get("periodo", f"{datetime.now().year}-ACTUAL"),
+        )
+        biography_url = deputy.get("biografia_url") or f"{DEPUTY_PROFILE_URL}?prmId={deputy['external_id']}"
 
         out.append(
             {
                 **deputy,
+                "biografia": biography,
+                "biografia_url": biography_url,
                 "asistencia_pct": pct if include_attendance else None,
                 "sesiones_totales": total if (include_attendance and total > 0) else None,
                 "sesiones_ausentes": absent if (include_attendance and total > 0) else None,

@@ -529,3 +529,10 @@ th {
   color: #111827;
   word-break: break-word;
 }
+
+.bio-text {
+  margin: 0;
+  font-size: 0.92rem;
+  color: #1f2937;
+  line-height: 1.55;
+}

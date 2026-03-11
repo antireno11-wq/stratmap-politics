@@ -27,6 +27,7 @@ PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT = os.getenv(
     "SENATE_PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT",
     "/api/parliamentarians/attendance_committees",
 )
+PARLIAMENTARIANS_JSONAPI_ENDPOINT = os.getenv("SENATE_PARLIAMENTARIANS_JSONAPI_ENDPOINT", "/jsonapi/node/parlamentarios")
 COMMISSION_SESSIONS_ENDPOINT = os.getenv("SENATE_COMMISSION_SESSIONS_ENDPOINT", "/api/commission_sessions")
 COMMISSION_SUBJECTS_ENDPOINT = os.getenv("SENATE_COMMISSION_SUBJECTS_ENDPOINT", "/api/commission_subjects")
 COMMISSION_ACTIVITIES_ENDPOINT = os.getenv("SENATE_COMMISSION_ACTIVITIES_ENDPOINT", "/api/commission_activities")
@@ -79,6 +80,24 @@ def _backend_get_json(endpoint: str, params: Optional[Dict[str, Any]] = None) ->
     response.raise_for_status()
     payload = response.json()
     return payload if isinstance(payload, dict) else {}
+
+
+def _senator_profile_url(slug: str) -> Optional[str]:
+    clean_slug = str(slug or "").strip().strip("/")
+    if not clean_slug:
+        return None
+    return f"https://www.senado.cl/senadoras-y-senadores/listado-de-senadoras-y-senadores/{clean_slug}"
+
+
+def _clean_html_text(html_content: Any) -> Optional[str]:
+    raw = str(html_content or "").strip()
+    if not raw:
+        return None
+    soup = BeautifulSoup(raw, "html.parser")
+    text = " ".join(soup.stripped_strings)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    return text or None
 
 
 def _payload_total(payload: Dict[str, Any]) -> int:
@@ -285,6 +304,58 @@ def _fetch_committee_fields_for_senator(
     }
 
 
+def _fetch_biography_for_senator(senate_id: str, slug: str) -> Tuple[Optional[str], Optional[str]]:
+    params: Dict[str, Any] = {"fields[node--parlamentarios]": "title,body,field_trayectoria,slug,field_id"}
+    if senate_id:
+        params["filter[field_id]"] = senate_id
+    elif slug:
+        params["filter[slug]"] = slug
+    else:
+        return None, None
+
+    try:
+        payload = _backend_get_json(PARLIAMENTARIANS_JSONAPI_ENDPOINT, params=params)
+    except Exception:
+        return None, _senator_profile_url(slug)
+
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        return None, _senator_profile_url(slug)
+    first = data[0] if isinstance(data[0], dict) else {}
+    attrs = first.get("attributes", {}) if isinstance(first.get("attributes"), dict) else {}
+    slug_value = str(attrs.get("slug") or slug or "").strip().lower()
+    profile_url = _senator_profile_url(slug_value)
+
+    bio_html = ""
+    field_trayectoria = attrs.get("field_trayectoria")
+    if isinstance(field_trayectoria, dict):
+        bio_html = str(field_trayectoria.get("processed") or field_trayectoria.get("value") or "").strip()
+    if not bio_html:
+        body = attrs.get("body")
+        if isinstance(body, dict):
+            bio_html = str(body.get("processed") or body.get("value") or "").strip()
+
+    return _clean_html_text(bio_html), profile_url
+
+
+def _merge_biographies(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cache: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    for item in senators:
+        senate_id = str(item.get("_senate_id") or "").strip()
+        slug = str(item.get("external_id") or "").strip().lower()
+        key = senate_id or slug
+        if not key:
+            continue
+        if key not in cache:
+            cache[key] = _fetch_biography_for_senator(senate_id, slug)
+        bio, url = cache[key]
+        if bio:
+            item["biografia"] = bio
+        if url:
+            item["biografia_url"] = url
+    return senators
+
+
 def _merge_committee_fields(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not senators:
         return senators
@@ -365,6 +436,8 @@ def _fetch_senators_from_hemicycle() -> List[Dict[str, Any]]:
                 "distrito_circunscripcion": circ,
                 "region": region,
                 "periodo": _extract_period(row.get("PERIODOS")),
+                "biografia": None,
+                "biografia_url": _senator_profile_url(slug),
                 "asistencia_pct": None,
                 "sesiones_totales": None,
                 "sesiones_ausentes": None,
@@ -478,6 +551,8 @@ def _fetch_attendance_maps() -> Dict[str, Any]:
                     "distrito_circunscripcion": "Sin dato",
                     "region": "Sin dato",
                     "periodo": f"{datetime.now().year}-ACTUAL",
+                    "biografia": None,
+                    "biografia_url": _senator_profile_url(slug),
                     "asistencia_pct": stats.get("asistencia_pct"),
                     "sesiones_totales": stats.get("sesiones_totales"),
                     "sesiones_ausentes": stats.get("sesiones_ausentes"),
@@ -524,6 +599,8 @@ def _fetch_senators_from_html() -> List[Dict[str, Any]]:
                 "distrito_circunscripcion": "Sin dato",
                 "region": "Sin dato",
                 "periodo": f"{datetime.now().year}-ACTUAL",
+                "biografia": None,
+                "biografia_url": _senator_profile_url(external_id),
                 "asistencia_pct": None,
                 "sesiones_totales": None,
                 "sesiones_ausentes": None,
@@ -568,6 +645,8 @@ def _fetch_senators_from_html() -> List[Dict[str, Any]]:
                 "distrito_circunscripcion": circ,
                 "region": region,
                 "periodo": f"{datetime.now().year}-ACTUAL",
+                "biografia": None,
+                "biografia_url": _senator_profile_url(_name_to_id(nombre)),
                 "asistencia_pct": None,
                 "sesiones_totales": None,
                 "sesiones_ausentes": None,
@@ -593,6 +672,9 @@ def _dedup_senators(out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # Conserva la versión más rica campo a campo.
         for field in ["nombre", "partido", "distrito_circunscripcion", "region", "periodo"]:
             if _is_missing(current.get(field, "")) and not _is_missing(item.get(field, "")):
+                current[field] = item[field]
+        for field in ["biografia", "biografia_url"]:
+            if not current.get(field) and item.get(field):
                 current[field] = item[field]
         for field in [
             "asistencia_pct",
@@ -674,6 +756,7 @@ def fetch_senators() -> List[Dict[str, Any]]:
         out = _fetch_senators_from_html()
 
     out = _merge_attendance(out)
+    out = _merge_biographies(out)
     out = _merge_committee_fields(out)
     out = _dedup_senators(out)
     for item in out:

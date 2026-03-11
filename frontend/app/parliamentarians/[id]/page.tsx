@@ -16,6 +16,12 @@ function safeDate(value: any) {
   return dt.toLocaleString("es-CL");
 }
 
+function safeBiography(value: any) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text ? text : null;
+}
+
 function ringStyle(value: number, color: string) {
   const clamped = Math.max(0, Math.min(100, value));
   const deg = clamped * 3.6;
@@ -32,6 +38,9 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
   const score = scoreBreakdown.total_score;
   const attendance = scoreBreakdown.attendance_score;
   const committeeScore = scoreBreakdown.committee_score;
+  const biography = safeBiography(p.biografia);
+  const rawBiographyUrl = String(p.biografia_url ?? "").trim();
+  const biographyUrl = !rawBiographyUrl || rawBiographyUrl === "Sin dato" ? null : rawBiographyUrl;
   const attended =
     p.sesiones_totales == null || p.sesiones_ausentes == null
       ? null
@@ -168,6 +177,23 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             </div>
           </div>
         </div>
+      </section>
+
+      <section className="card">
+        <h3 className="filter-title">Biografía</h3>
+        {biography ? (
+          <p className="bio-text">{biography}</p>
+        ) : (
+          <p className="profile-meta">Sin biografía disponible por ahora.</p>
+        )}
+        {biographyUrl ? (
+          <p className="profile-meta">
+            Fuente:{" "}
+            <a href={biographyUrl} target="_blank" rel="noreferrer">
+              Perfil oficial
+            </a>
+          </p>
+        ) : null}
       </section>
 
       <section className="card">
