@@ -55,14 +55,15 @@ class SenateBiographyTests(unittest.TestCase):
             {"external_id": "slug-a-sen", "_senate_id": "11"},
             {"external_id": "slug-b-sen", "_senate_id": "12"},
         ]
-        with patch(
-            "backend.app.scrapers.senate._fetch_biography_for_senator",
-            side_effect=[
-                ("Bio A", "https://www.senado.cl/.../slug-a-sen"),
-                ("Bio B", "https://www.senado.cl/.../slug-b-sen"),
-            ],
-        ) as mocked:
-            out = senate._merge_biographies(senators)
+        with patch("backend.app.scrapers.senate._fetch_biography_index", return_value=({}, {})):
+            with patch(
+                "backend.app.scrapers.senate._fetch_biography_for_senator",
+                side_effect=[
+                    ("Bio A", "https://www.senado.cl/.../slug-a-sen"),
+                    ("Bio B", "https://www.senado.cl/.../slug-b-sen"),
+                ],
+            ) as mocked:
+                out = senate._merge_biographies(senators)
 
         self.assertEqual(mocked.call_count, 2)
         self.assertEqual(out[0]["biografia"], "Bio A")

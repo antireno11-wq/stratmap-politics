@@ -4,6 +4,7 @@ import json
 import os
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,6 +33,11 @@ COMMISSION_SESSIONS_ENDPOINT = os.getenv("SENATE_COMMISSION_SESSIONS_ENDPOINT", 
 COMMISSION_SUBJECTS_ENDPOINT = os.getenv("SENATE_COMMISSION_SUBJECTS_ENDPOINT", "/api/commission_subjects")
 COMMISSION_ACTIVITIES_ENDPOINT = os.getenv("SENATE_COMMISSION_ACTIVITIES_ENDPOINT", "/api/commission_activities")
 REQUEST_TIMEOUT = int(os.getenv("SENATE_REQUEST_TIMEOUT", "45"))
+COMMITTEE_MAX_WORKERS = max(1, int(os.getenv("SENATE_COMMITTEE_MAX_WORKERS", "8")))
+BIOGRAPHY_BULK_LIMIT = max(50, int(os.getenv("SENATE_BIOGRAPHY_BULK_LIMIT", "200")))
+ENABLE_COMMITTEE_ATTENDANCE = os.getenv("SENATE_ENABLE_COMMITTEE_ATTENDANCE", "0").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_COMMITTEE_TOTAL_SESSIONS = os.getenv("SENATE_ENABLE_COMMITTEE_TOTAL_SESSIONS", "0").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_COMMITTEE_ACTIVITY = os.getenv("SENATE_ENABLE_COMMITTEE_ACTIVITY", "0").strip().lower() in {"1", "true", "yes", "on"}
 
 DEFAULT_URLS = [
     SENATE_URL,
@@ -199,17 +205,37 @@ def _committee_totals_for_id(
     cache_subjects_total: Dict[int, int],
     cache_activities_total: Dict[int, int],
 ) -> Tuple[int, int, int]:
+    if not ENABLE_COMMITTEE_TOTAL_SESSIONS and not ENABLE_COMMITTEE_ACTIVITY:
+        return (0, 0, 0)
     if committee_id not in cache_sessions_total:
-        payload = _backend_get_json(COMMISSION_SESSIONS_ENDPOINT, {"id_comision": committee_id, "limit": 1})
-        cache_sessions_total[committee_id] = _payload_total(payload)
+        if ENABLE_COMMITTEE_TOTAL_SESSIONS:
+            try:
+                payload = _backend_get_json(COMMISSION_SESSIONS_ENDPOINT, {"id_comision": committee_id, "limit": 1})
+                cache_sessions_total[committee_id] = _payload_total(payload)
+            except Exception:
+                cache_sessions_total[committee_id] = 0
+        else:
+            cache_sessions_total[committee_id] = 0
     if committee_id not in cache_subjects_total:
-        payload = _backend_get_json(COMMISSION_SUBJECTS_ENDPOINT, {"id_comision": committee_id, "limit": 1})
-        data = payload.get("data", {})
-        projects = data.get("proyectos") if isinstance(data, dict) else None
-        cache_subjects_total[committee_id] = _to_int(projects, _payload_total(payload))
+        if ENABLE_COMMITTEE_ACTIVITY:
+            try:
+                payload = _backend_get_json(COMMISSION_SUBJECTS_ENDPOINT, {"id_comision": committee_id, "limit": 1})
+                data = payload.get("data", {})
+                projects = data.get("proyectos") if isinstance(data, dict) else None
+                cache_subjects_total[committee_id] = _to_int(projects, _payload_total(payload))
+            except Exception:
+                cache_subjects_total[committee_id] = 0
+        else:
+            cache_subjects_total[committee_id] = 0
     if committee_id not in cache_activities_total:
-        payload = _backend_get_json(COMMISSION_ACTIVITIES_ENDPOINT, {"id_comision": committee_id, "limit": 1})
-        cache_activities_total[committee_id] = _payload_total(payload)
+        if ENABLE_COMMITTEE_ACTIVITY:
+            try:
+                payload = _backend_get_json(COMMISSION_ACTIVITIES_ENDPOINT, {"id_comision": committee_id, "limit": 1})
+                cache_activities_total[committee_id] = _payload_total(payload)
+            except Exception:
+                cache_activities_total[committee_id] = 0
+        else:
+            cache_activities_total[committee_id] = 0
     return (
         cache_sessions_total[committee_id],
         cache_subjects_total[committee_id],
@@ -219,12 +245,13 @@ def _committee_totals_for_id(
 
 def _fetch_committee_fields_for_senator(
     senate_id: str,
-    cache_sessions_total: Dict[int, int],
-    cache_subjects_total: Dict[int, int],
-    cache_activities_total: Dict[int, int],
+    cache_sessions_total: Optional[Dict[int, int]] = None,
+    cache_subjects_total: Optional[Dict[int, int]] = None,
+    cache_activities_total: Optional[Dict[int, int]] = None,
 ) -> Dict[str, Any]:
-    if not senate_id:
-        return _empty_committee_fields()
+    cache_sessions_total = cache_sessions_total if cache_sessions_total is not None else {}
+    cache_subjects_total = cache_subjects_total if cache_subjects_total is not None else {}
+    cache_activities_total = cache_activities_total if cache_activities_total is not None else {}
 
     memberships: List[Dict[str, Any]] = []
     topic_counts: Dict[str, int] = {}
@@ -232,54 +259,58 @@ def _fetch_committee_fields_for_senator(
     bills_discussed_total = 0
     interventions_total = 0
 
-    try:
-        commissions_payload = _backend_get_json(
-            PARLIAMENTARIAN_COMMISSIONS_ENDPOINT,
-            {"id_parlamentario": senate_id, "vigentes": 1, "limit": 100},
-        )
-        rows = _payload_data_rows(commissions_payload)
-        for row in rows:
-            committee_id = _to_int(row.get("ID_COMISION"), 0)
-            committee_name = str(row.get("NOMBRE") or "").strip()
-            role_raw = str(row.get("CARGO") or "").strip() or "Integrante"
-            topic = _committee_topic_from_name(committee_name)
-            topic_counts[topic] = topic_counts.get(topic, 0) + 1
-
-            if committee_id > 0:
-                total_sessions, discussed_count, activities_count = _committee_totals_for_id(
-                    committee_id,
-                    cache_sessions_total,
-                    cache_subjects_total,
-                    cache_activities_total,
-                )
-                committee_total_sessions += total_sessions
-                bills_discussed_total += discussed_count
-                interventions_total += activities_count
-
-            memberships.append(
-                {
-                    "committee_id": committee_id if committee_id > 0 else None,
-                    "committee_name": committee_name or "Sin dato",
-                    "role": _normalize_role(role_raw),
-                    "role_raw": role_raw,
-                    "topic": topic,
-                    "type": str(row.get("DESCRIPCION") or "").strip() or None,
-                    "start_date": str(row.get("FECHAINI") or "").strip() or None,
-                    "end_date": str(row.get("FECHAFIN") or "").strip() or None,
-                }
+    rows: List[Dict[str, Any]] = []
+    if senate_id:
+        try:
+            commissions_payload = _backend_get_json(
+                PARLIAMENTARIAN_COMMISSIONS_ENDPOINT,
+                {"id_parlamentario": senate_id, "vigentes": 1, "limit": 100},
             )
-    except Exception:
-        return _empty_committee_fields()
+            rows = _payload_data_rows(commissions_payload)
+        except Exception:
+            rows = []
+
+    for row in rows:
+        committee_id = _to_int(row.get("ID_COMISION"), 0)
+        committee_name = str(row.get("NOMBRE") or "").strip()
+        role_raw = str(row.get("CARGO") or "").strip() or "Integrante"
+        topic = _committee_topic_from_name(committee_name)
+        topic_counts[topic] = topic_counts.get(topic, 0) + 1
+
+        if committee_id > 0 and (ENABLE_COMMITTEE_TOTAL_SESSIONS or ENABLE_COMMITTEE_ACTIVITY):
+            total_sessions, discussed_count, activities_count = _committee_totals_for_id(
+                committee_id,
+                cache_sessions_total,
+                cache_subjects_total,
+                cache_activities_total,
+            )
+            committee_total_sessions += total_sessions
+            bills_discussed_total += discussed_count
+            interventions_total += activities_count
+
+        memberships.append(
+            {
+                "committee_id": committee_id if committee_id > 0 else None,
+                "committee_name": committee_name or "Sin dato",
+                "role": _normalize_role(role_raw),
+                "role_raw": role_raw,
+                "topic": topic,
+                "type": str(row.get("DESCRIPCION") or "").strip() or None,
+                "start_date": str(row.get("FECHAINI") or "").strip() or None,
+                "end_date": str(row.get("FECHAFIN") or "").strip() or None,
+            }
+        )
 
     sessions_attended = None
-    try:
-        attendance_payload = _backend_get_json(
-            PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT,
-            {"id_parlamentario": senate_id, "limit": 1000, "offset": 0},
-        )
-        sessions_attended = _payload_total(attendance_payload)
-    except Exception:
-        sessions_attended = None
+    if senate_id and ENABLE_COMMITTEE_ATTENDANCE:
+        try:
+            attendance_payload = _backend_get_json(
+                PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT,
+                {"id_parlamentario": senate_id, "limit": 1000, "offset": 0},
+            )
+            sessions_attended = _payload_total(attendance_payload)
+        except Exception:
+            sessions_attended = None
 
     if (
         sessions_attended is not None
@@ -296,7 +327,7 @@ def _fetch_committee_fields_for_senator(
         "committee_memberships": memberships,
         "committee_sessions_attended": sessions_attended,
         "committee_total_sessions": total_sessions_value,
-        "committee_count": len(memberships),
+        "committee_count": len(memberships) if memberships else None,
         "committee_activity_bills_discussed": bills_discussed_total if bills_discussed_total > 0 else None,
         "committee_activity_bills_sponsored": None,
         "committee_activity_interventions": interventions_total if interventions_total > 0 else None,
@@ -338,17 +369,69 @@ def _fetch_biography_for_senator(senate_id: str, slug: str) -> Tuple[Optional[st
     return _clean_html_text(bio_html), profile_url
 
 
+def _fetch_biography_index() -> Tuple[Dict[str, Tuple[Optional[str], Optional[str]]], Dict[str, Tuple[Optional[str], Optional[str]]]]:
+    params: Dict[str, Any] = {
+        "page[limit]": BIOGRAPHY_BULK_LIMIT,
+        "fields[node--parlamentarios]": "title,body,field_trayectoria,slug,field_id",
+    }
+    by_id: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+    by_slug: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+
+    try:
+        payload = _backend_get_json(PARLIAMENTARIANS_JSONAPI_ENDPOINT, params=params)
+    except Exception:
+        return by_id, by_slug
+
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return by_id, by_slug
+
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        attrs = row.get("attributes", {})
+        if not isinstance(attrs, dict):
+            continue
+        slug = str(attrs.get("slug") or "").strip().lower()
+        senate_id = str(attrs.get("field_id") or "").strip()
+        bio_html = ""
+        field_trayectoria = attrs.get("field_trayectoria")
+        if isinstance(field_trayectoria, dict):
+            bio_html = str(field_trayectoria.get("processed") or field_trayectoria.get("value") or "").strip()
+        if not bio_html:
+            body = attrs.get("body")
+            if isinstance(body, dict):
+                bio_html = str(body.get("processed") or body.get("value") or "").strip()
+        bio = _clean_html_text(bio_html)
+        url = _senator_profile_url(slug)
+        value = (bio, url)
+        if senate_id:
+            by_id[senate_id] = value
+        if slug:
+            by_slug[slug] = value
+    return by_id, by_slug
+
+
 def _merge_biographies(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    by_id, by_slug = _fetch_biography_index()
     cache: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+
     for item in senators:
         senate_id = str(item.get("_senate_id") or "").strip()
         slug = str(item.get("external_id") or "").strip().lower()
         key = senate_id or slug
         if not key:
             continue
-        if key not in cache:
-            cache[key] = _fetch_biography_for_senator(senate_id, slug)
-        bio, url = cache[key]
+
+        bio_url = by_id.get(senate_id) if senate_id else None
+        if bio_url is None and slug:
+            bio_url = by_slug.get(slug)
+        if bio_url is None:
+            if key not in cache:
+                cache[key] = _fetch_biography_for_senator(senate_id, slug)
+            bio_url = cache[key]
+
+        bio, url = bio_url
         if bio:
             item["biografia"] = bio
         if url:
@@ -360,19 +443,19 @@ def _merge_committee_fields(senators: List[Dict[str, Any]]) -> List[Dict[str, An
     if not senators:
         return senators
 
-    cache_sessions_total: Dict[int, int] = {}
-    cache_subjects_total: Dict[int, int] = {}
-    cache_activities_total: Dict[int, int] = {}
+    jobs: Dict[Any, int] = {}
+    with ThreadPoolExecutor(max_workers=COMMITTEE_MAX_WORKERS) as executor:
+        for idx, item in enumerate(senators):
+            senate_id = str(item.get("_senate_id") or "").strip()
+            jobs[executor.submit(_fetch_committee_fields_for_senator, senate_id)] = idx
 
-    for item in senators:
-        senate_id = str(item.get("_senate_id") or "").strip()
-        committee_fields = _fetch_committee_fields_for_senator(
-            senate_id,
-            cache_sessions_total,
-            cache_subjects_total,
-            cache_activities_total,
-        )
-        item.update(committee_fields)
+        for future in as_completed(jobs):
+            idx = jobs[future]
+            try:
+                committee_fields = future.result()
+            except Exception:
+                committee_fields = _empty_committee_fields()
+            senators[idx].update(committee_fields)
 
     return senators
 
