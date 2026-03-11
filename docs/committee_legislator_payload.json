@@ -1,0 +1,57 @@
+{
+  "camara": "SENADOR",
+  "items": [
+    {
+      "external_id": "tomas-de-rementeria-venegas-sen",
+      "nombre": "Tomas De Rementeria Venegas",
+      "partido": "Partido Socialista",
+      "distrito_circunscripcion": "Circunscripcion 6",
+      "region": "Region de Valparaiso",
+      "periodo": "2022-2026",
+      "asistencia_pct": 92.5,
+      "sesiones_totales": 120,
+      "sesiones_ausentes": 9,
+      "committee_sessions_attended": 43,
+      "committee_total_sessions": 58,
+      "committee_count": 4,
+      "committee_memberships": [
+        {
+          "committee_id": 899,
+          "committee_name": "Comision Especial de Zonas Extremas y Territorios Especiales",
+          "role": "Full member",
+          "topic": "medioambiente_territorio",
+          "start_date": "23/04/2025"
+        },
+        {
+          "committee_id": 1009,
+          "committee_name": "Comision de Recursos Hidricos, Desertificacion y Sequia",
+          "role": "Full member",
+          "topic": "medioambiente_territorio",
+          "start_date": "28/04/2025"
+        },
+        {
+          "committee_id": 1000,
+          "committee_name": "Comision de Educacion",
+          "role": "Vice President",
+          "topic": "social_educacion_salud",
+          "start_date": "14/05/2025"
+        },
+        {
+          "committee_id": 905,
+          "committee_name": "Comision de Relaciones Exteriores",
+          "role": "Substitute member",
+          "topic": "relaciones_exteriores",
+          "start_date": "04/06/2025"
+        }
+      ],
+      "committee_activity_bills_discussed": 32,
+      "committee_activity_bills_sponsored": 4,
+      "committee_activity_interventions": 11,
+      "committee_topic_counts": {
+        "medioambiente_territorio": 2,
+        "social_educacion_salud": 1,
+        "relaciones_exteriores": 1
+      }
+    }
+  ]
+}

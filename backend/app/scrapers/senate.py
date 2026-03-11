@@ -22,6 +22,14 @@ SENATE_ATTENDANCE_URL = os.getenv(
 SENATE_BACKEND_BASE = os.getenv("SENATE_BACKEND_BASE", "https://web-back.senado.cl").rstrip("/")
 HEMICYCLE_ENDPOINT = os.getenv("SENATE_HEMICYCLE_ENDPOINT", "/api/hemicycle")
 ATTENDANCE_ENDPOINT = os.getenv("SENATE_ATTENDANCE_ENDPOINT", "/api/sessions/attendance")
+PARLIAMENTARIAN_COMMISSIONS_ENDPOINT = os.getenv("SENATE_PARLIAMENTARIAN_COMMISSIONS_ENDPOINT", "/api/parliamentarians/commissions")
+PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT = os.getenv(
+    "SENATE_PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT",
+    "/api/parliamentarians/attendance_committees",
+)
+COMMISSION_SESSIONS_ENDPOINT = os.getenv("SENATE_COMMISSION_SESSIONS_ENDPOINT", "/api/commission_sessions")
+COMMISSION_SUBJECTS_ENDPOINT = os.getenv("SENATE_COMMISSION_SUBJECTS_ENDPOINT", "/api/commission_subjects")
+COMMISSION_ACTIVITIES_ENDPOINT = os.getenv("SENATE_COMMISSION_ACTIVITIES_ENDPOINT", "/api/commission_activities")
 REQUEST_TIMEOUT = int(os.getenv("SENATE_REQUEST_TIMEOUT", "45"))
 
 DEFAULT_URLS = [
@@ -66,6 +74,55 @@ def _backend_url(endpoint: str) -> str:
     return f"{SENATE_BACKEND_BASE}{endpoint}"
 
 
+def _backend_get_json(endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    response = requests.get(_backend_url(endpoint), params=params or {}, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def _payload_total(payload: Dict[str, Any]) -> int:
+    data = payload.get("data")
+    if isinstance(data, dict):
+        return _to_int(data.get("total"), 0)
+    return 0
+
+
+def _payload_data_rows(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    data = payload.get("data")
+    if isinstance(data, dict):
+        rows = data.get("data")
+        if isinstance(rows, list):
+            return [r for r in rows if isinstance(r, dict)]
+    return []
+
+
+def _committee_topic_from_name(name: str) -> str:
+    text = _normalize_name(name)
+    if any(k in text for k in ["hacienda", "econom", "presupuesto", "finanza", "tribut", "mineria", "energia"]):
+        return "economia_hacienda"
+    if any(k in text for k in ["salud", "educ", "vivienda", "mujer", "trabajo", "ninez", "niñez", "cultura"]):
+        return "social_educacion_salud"
+    if any(k in text for k in ["justicia", "constitucion", "constitución", "seguridad", "defensa", "inteligencia"]):
+        return "justicia_seguridad"
+    if any(k in text for k in ["medio ambiente", "territorio", "zonas extremas", "acuicultura", "marit", "hidric"]):
+        return "medioambiente_territorio"
+    if any(k in text for k in ["relaciones exteriores", "interparlament", "integracion latinoamericana", "integración latinoamericana"]):
+        return "relaciones_exteriores"
+    return "otros"
+
+
+def _normalize_role(role: str) -> str:
+    text = _normalize_name(role)
+    if "vice" in text:
+        return "Vice President"
+    if "president" in text or "presidente" in text:
+        return "President"
+    if "reemplazante" in text or "suplente" in text:
+        return "Substitute member"
+    return "Full member"
+
+
 def _download_html(urls: Optional[List[str]] = None) -> str:
     target_urls = urls or DEFAULT_URLS
     last_error: Optional[Exception] = None
@@ -102,6 +159,151 @@ def _extract_period(periodos: Any) -> str:
     if desde:
         return f"{desde}-ACTUAL"
     return f"{datetime.now().year}-ACTUAL"
+
+
+def _empty_committee_fields() -> Dict[str, Any]:
+    return {
+        "committee_memberships": [],
+        "committee_sessions_attended": None,
+        "committee_total_sessions": None,
+        "committee_count": None,
+        "committee_activity_bills_discussed": None,
+        "committee_activity_bills_sponsored": None,
+        "committee_activity_interventions": None,
+        "committee_topic_counts": None,
+    }
+
+
+def _committee_totals_for_id(
+    committee_id: int,
+    cache_sessions_total: Dict[int, int],
+    cache_subjects_total: Dict[int, int],
+    cache_activities_total: Dict[int, int],
+) -> Tuple[int, int, int]:
+    if committee_id not in cache_sessions_total:
+        payload = _backend_get_json(COMMISSION_SESSIONS_ENDPOINT, {"id_comision": committee_id, "limit": 1})
+        cache_sessions_total[committee_id] = _payload_total(payload)
+    if committee_id not in cache_subjects_total:
+        payload = _backend_get_json(COMMISSION_SUBJECTS_ENDPOINT, {"id_comision": committee_id, "limit": 1})
+        data = payload.get("data", {})
+        projects = data.get("proyectos") if isinstance(data, dict) else None
+        cache_subjects_total[committee_id] = _to_int(projects, _payload_total(payload))
+    if committee_id not in cache_activities_total:
+        payload = _backend_get_json(COMMISSION_ACTIVITIES_ENDPOINT, {"id_comision": committee_id, "limit": 1})
+        cache_activities_total[committee_id] = _payload_total(payload)
+    return (
+        cache_sessions_total[committee_id],
+        cache_subjects_total[committee_id],
+        cache_activities_total[committee_id],
+    )
+
+
+def _fetch_committee_fields_for_senator(
+    senate_id: str,
+    cache_sessions_total: Dict[int, int],
+    cache_subjects_total: Dict[int, int],
+    cache_activities_total: Dict[int, int],
+) -> Dict[str, Any]:
+    if not senate_id:
+        return _empty_committee_fields()
+
+    memberships: List[Dict[str, Any]] = []
+    topic_counts: Dict[str, int] = {}
+    committee_total_sessions = 0
+    bills_discussed_total = 0
+    interventions_total = 0
+
+    try:
+        commissions_payload = _backend_get_json(
+            PARLIAMENTARIAN_COMMISSIONS_ENDPOINT,
+            {"id_parlamentario": senate_id, "vigentes": 1, "limit": 100},
+        )
+        rows = _payload_data_rows(commissions_payload)
+        for row in rows:
+            committee_id = _to_int(row.get("ID_COMISION"), 0)
+            committee_name = str(row.get("NOMBRE") or "").strip()
+            role_raw = str(row.get("CARGO") or "").strip() or "Integrante"
+            topic = _committee_topic_from_name(committee_name)
+            topic_counts[topic] = topic_counts.get(topic, 0) + 1
+
+            if committee_id > 0:
+                total_sessions, discussed_count, activities_count = _committee_totals_for_id(
+                    committee_id,
+                    cache_sessions_total,
+                    cache_subjects_total,
+                    cache_activities_total,
+                )
+                committee_total_sessions += total_sessions
+                bills_discussed_total += discussed_count
+                interventions_total += activities_count
+
+            memberships.append(
+                {
+                    "committee_id": committee_id if committee_id > 0 else None,
+                    "committee_name": committee_name or "Sin dato",
+                    "role": _normalize_role(role_raw),
+                    "role_raw": role_raw,
+                    "topic": topic,
+                    "type": str(row.get("DESCRIPCION") or "").strip() or None,
+                    "start_date": str(row.get("FECHAINI") or "").strip() or None,
+                    "end_date": str(row.get("FECHAFIN") or "").strip() or None,
+                }
+            )
+    except Exception:
+        return _empty_committee_fields()
+
+    sessions_attended = None
+    try:
+        attendance_payload = _backend_get_json(
+            PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT,
+            {"id_parlamentario": senate_id, "limit": 1000, "offset": 0},
+        )
+        sessions_attended = _payload_total(attendance_payload)
+    except Exception:
+        sessions_attended = None
+
+    if (
+        sessions_attended is not None
+        and committee_total_sessions > 0
+        and sessions_attended > committee_total_sessions
+    ):
+        committee_total_sessions = sessions_attended
+
+    total_sessions_value = committee_total_sessions if committee_total_sessions > 0 else None
+    if total_sessions_value is None and sessions_attended is not None:
+        total_sessions_value = sessions_attended
+
+    return {
+        "committee_memberships": memberships,
+        "committee_sessions_attended": sessions_attended,
+        "committee_total_sessions": total_sessions_value,
+        "committee_count": len(memberships),
+        "committee_activity_bills_discussed": bills_discussed_total if bills_discussed_total > 0 else None,
+        "committee_activity_bills_sponsored": None,
+        "committee_activity_interventions": interventions_total if interventions_total > 0 else None,
+        "committee_topic_counts": topic_counts or None,
+    }
+
+
+def _merge_committee_fields(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not senators:
+        return senators
+
+    cache_sessions_total: Dict[int, int] = {}
+    cache_subjects_total: Dict[int, int] = {}
+    cache_activities_total: Dict[int, int] = {}
+
+    for item in senators:
+        senate_id = str(item.get("_senate_id") or "").strip()
+        committee_fields = _fetch_committee_fields_for_senator(
+            senate_id,
+            cache_sessions_total,
+            cache_subjects_total,
+            cache_activities_total,
+        )
+        item.update(committee_fields)
+
+    return senators
 
 
 def _fetch_senators_from_hemicycle() -> List[Dict[str, Any]]:
@@ -167,6 +369,7 @@ def _fetch_senators_from_hemicycle() -> List[Dict[str, Any]]:
                 "sesiones_totales": None,
                 "sesiones_ausentes": None,
                 "_senate_id": str(row.get("ID_PARLAMENTARIO") or "").strip(),
+                **_empty_committee_fields(),
             }
         )
     return out
@@ -279,6 +482,7 @@ def _fetch_attendance_maps() -> Dict[str, Any]:
                     "sesiones_totales": stats.get("sesiones_totales"),
                     "sesiones_ausentes": stats.get("sesiones_ausentes"),
                     "_senate_id": sid,
+                    **_empty_committee_fields(),
                 }
             )
 
@@ -323,6 +527,8 @@ def _fetch_senators_from_html() -> List[Dict[str, Any]]:
                 "asistencia_pct": None,
                 "sesiones_totales": None,
                 "sesiones_ausentes": None,
+                "_senate_id": None,
+                **_empty_committee_fields(),
             }
         )
 
@@ -365,6 +571,8 @@ def _fetch_senators_from_html() -> List[Dict[str, Any]]:
                 "asistencia_pct": None,
                 "sesiones_totales": None,
                 "sesiones_ausentes": None,
+                "_senate_id": None,
+                **_empty_committee_fields(),
             }
         )
 
@@ -386,9 +594,25 @@ def _dedup_senators(out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for field in ["nombre", "partido", "distrito_circunscripcion", "region", "periodo"]:
             if _is_missing(current.get(field, "")) and not _is_missing(item.get(field, "")):
                 current[field] = item[field]
-        for field in ["asistencia_pct", "sesiones_totales", "sesiones_ausentes"]:
+        for field in [
+            "asistencia_pct",
+            "sesiones_totales",
+            "sesiones_ausentes",
+            "committee_sessions_attended",
+            "committee_total_sessions",
+            "committee_count",
+            "committee_activity_bills_discussed",
+            "committee_activity_bills_sponsored",
+            "committee_activity_interventions",
+        ]:
             if current.get(field) is None and item.get(field) is not None:
                 current[field] = item[field]
+        if (not current.get("committee_memberships")) and item.get("committee_memberships"):
+            current["committee_memberships"] = item["committee_memberships"]
+        if (not current.get("committee_topic_counts")) and item.get("committee_topic_counts"):
+            current["committee_topic_counts"] = item["committee_topic_counts"]
+        if (not current.get("_senate_id")) and item.get("_senate_id"):
+            current["_senate_id"] = item["_senate_id"]
         dedup[key] = current
 
     return list(dedup.values())
@@ -398,8 +622,6 @@ def _merge_attendance(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     try:
         attendance = _fetch_attendance_maps()
     except Exception:
-        for s in senators:
-            s.pop("_senate_id", None)
         return senators
 
     by_id = attendance["id"]
@@ -408,7 +630,7 @@ def _merge_attendance(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     for item in senators:
         stats: Optional[Dict[str, Optional[float]]] = None
-        senate_id = str(item.pop("_senate_id", "")).strip()
+        senate_id = str(item.get("_senate_id") or "").strip()
         if senate_id and senate_id in by_id:
             stats = by_id[senate_id]
         if stats is None:
@@ -437,8 +659,6 @@ def _merge_attendance(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         senators.append(extra)
         known_external_ids.add(key)
 
-    for s in senators:
-        s.pop("_senate_id", None)
     return senators
 
 
@@ -454,4 +674,8 @@ def fetch_senators() -> List[Dict[str, Any]]:
         out = _fetch_senators_from_html()
 
     out = _merge_attendance(out)
-    return _dedup_senators(out)
+    out = _merge_committee_fields(out)
+    out = _dedup_senators(out)
+    for item in out:
+        item.pop("_senate_id", None)
+    return out

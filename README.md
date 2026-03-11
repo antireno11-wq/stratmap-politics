@@ -22,6 +22,15 @@ Base actual: catalogo de parlamentarios de Chile (diputados + senadores) + asist
 - `GET /api/v1/parliamentarians`
 - `GET /api/v1/parliamentarians/{id}`
 
+## Committee Score (nuevo)
+- El backend expone por parlamentario:
+  - `committee_score`
+  - `committee_score_breakdown` (incluye valores raw, normalizados y ponderados)
+- Se persisten campos de comisiones en `parlamentarios` para auditoria:
+  - memberships, asistencia de comisiones, actividad y distribucion tematica.
+- Payload de ejemplo para ingesta manual:
+  - `docs/committee_legislator_payload.json`
+
 ## Flujo recomendado (Railway)
 1. Deploy backend y frontend.
 2. Ejecutar:

@@ -24,6 +24,21 @@ DEPUTY_PROFILE_URL = os.getenv(
 ).rstrip("/")
 
 
+def _empty_committee_fields() -> Dict[str, Any]:
+    # Cámara no expone un endpoint estructurado y estable de comisiones
+    # equivalente al Senado en esta integración.
+    return {
+        "committee_memberships": [],
+        "committee_sessions_attended": None,
+        "committee_total_sessions": None,
+        "committee_count": None,
+        "committee_activity_bills_discussed": None,
+        "committee_activity_bills_sponsored": None,
+        "committee_activity_interventions": None,
+        "committee_topic_counts": None,
+    }
+
+
 def _local_name(tag: str) -> str:
     if "}" in tag:
         return tag.split("}", 1)[1]
@@ -403,6 +418,7 @@ def fetch_deputies_periodo_actual(
                 "distrito_circunscripcion": distrito,
                 "region": region,
                 "periodo": f"{datetime.now().year}-ACTUAL",
+                **_empty_committee_fields(),
             }
         )
 
@@ -824,6 +840,7 @@ def build_deputy_profiles(
                 "sesiones_totales": total if (include_attendance and total > 0) else None,
                 "sesiones_ausentes": absent if (include_attendance and total > 0) else None,
                 "nombre_normalizado": _normalize_text(deputy["nombre"]),
+                **_empty_committee_fields(),
             }
         )
     return out

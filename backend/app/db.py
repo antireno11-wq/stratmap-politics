@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import unicodedata
@@ -8,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg
 from psycopg.rows import dict_row
+from .scoring import calc_committee_score
 
 
 def _db_url() -> str:
@@ -36,6 +38,16 @@ def init_db() -> None:
         asistencia_pct NUMERIC(5,2) NULL,
         sesiones_totales INTEGER NULL,
         sesiones_ausentes INTEGER NULL,
+        committee_memberships_json JSONB NULL,
+        committee_sessions_attended INTEGER NULL,
+        committee_total_sessions INTEGER NULL,
+        committee_count INTEGER NULL,
+        committee_activity_bills_discussed INTEGER NULL,
+        committee_activity_bills_sponsored INTEGER NULL,
+        committee_activity_interventions INTEGER NULL,
+        committee_topic_counts JSONB NULL,
+        committee_score NUMERIC(5,2) NULL,
+        committee_score_breakdown JSONB NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(camara, external_id)
@@ -66,6 +78,16 @@ def init_db() -> None:
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS asistencia_pct NUMERIC(5,2) NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS sesiones_totales INTEGER NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS sesiones_ausentes INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_memberships_json JSONB NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_sessions_attended INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_total_sessions INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_count INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_activity_bills_discussed INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_activity_bills_sponsored INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_activity_interventions INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_topic_counts JSONB NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_score NUMERIC(5,2) NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS committee_score_breakdown JSONB NULL;")
             # Backfill no destructivo desde la tabla antigua si existe.
             cur.execute(
                 """
@@ -101,6 +123,127 @@ def db_health() -> Tuple[bool, str]:
         return False, f"db error: {type(exc).__name__}: {exc}"
 
 
+def _json_dumps_or_none(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(float(value))
+    except Exception:
+        return None
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _estimate_committee_avg(items: List[Dict[str, Any]]) -> Optional[float]:
+    counts: List[int] = []
+    for item in items:
+        raw = _safe_int(item.get("committee_count"))
+        if raw is None:
+            memberships = item.get("committee_memberships")
+            if isinstance(memberships, list):
+                raw = len(memberships)
+        if raw is not None and raw >= 0:
+            counts.append(raw)
+    if not counts:
+        return None
+    return float(sum(counts)) / float(len(counts))
+
+
+def _build_committee_payload(item: Dict[str, Any], chamber_avg_committee_count: Optional[float]) -> Dict[str, Any]:
+    score_payload = calc_committee_score(
+        {
+            "committee_memberships": item.get("committee_memberships"),
+            "committee_sessions_attended": item.get("committee_sessions_attended"),
+            "committee_total_sessions": item.get("committee_total_sessions"),
+            "committee_count": item.get("committee_count"),
+            "committee_activity_bills_discussed": item.get("committee_activity_bills_discussed"),
+            "committee_activity_bills_sponsored": item.get("committee_activity_bills_sponsored"),
+            "committee_activity_interventions": item.get("committee_activity_interventions"),
+            "committee_topic_counts": item.get("committee_topic_counts"),
+            "chamber_average_committee_count": chamber_avg_committee_count or 0.0,
+        }
+    )
+    memberships = item.get("committee_memberships")
+    topic_counts = item.get("committee_topic_counts")
+    return {
+        "committee_memberships_json": _json_dumps_or_none(memberships if isinstance(memberships, list) else None),
+        "committee_sessions_attended": _safe_int(item.get("committee_sessions_attended")),
+        "committee_total_sessions": _safe_int(item.get("committee_total_sessions")),
+        "committee_count": _safe_int(item.get("committee_count"))
+        if _safe_int(item.get("committee_count")) is not None
+        else (len(memberships) if isinstance(memberships, list) else None),
+        "committee_activity_bills_discussed": _safe_int(item.get("committee_activity_bills_discussed")),
+        "committee_activity_bills_sponsored": _safe_int(item.get("committee_activity_bills_sponsored")),
+        "committee_activity_interventions": _safe_int(item.get("committee_activity_interventions")),
+        "committee_topic_counts": _json_dumps_or_none(topic_counts if isinstance(topic_counts, dict) else None),
+        "committee_score": _safe_float(score_payload.get("committee_score")),
+        "committee_score_breakdown": _json_dumps_or_none(score_payload.get("committee_score_breakdown")),
+    }
+
+
+def _chamber_avg_committee_counts() -> Dict[str, float]:
+    sql = """
+    SELECT camara, AVG(COALESCE(committee_count, 0))::float AS avg_committee_count
+    FROM parlamentarios
+    GROUP BY camara;
+    """
+    out: Dict[str, float] = {"DIPUTADO": 0.0, "SENADOR": 0.0}
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            for row in cur.fetchall():
+                out[str(row["camara"])] = float(row.get("avg_committee_count") or 0.0)
+    return out
+
+
+def _attach_committee_scores(rows: List[Dict[str, Any]], averages: Dict[str, float]) -> List[Dict[str, Any]]:
+    for row in rows:
+        memberships = row.get("committee_memberships")
+        if isinstance(memberships, str):
+            try:
+                memberships = json.loads(memberships)
+            except Exception:
+                memberships = []
+        topic_counts = row.get("committee_topic_counts")
+        if isinstance(topic_counts, str):
+            try:
+                topic_counts = json.loads(topic_counts)
+            except Exception:
+                topic_counts = None
+        row["committee_memberships"] = memberships if isinstance(memberships, list) else []
+        row["committee_topic_counts"] = topic_counts if isinstance(topic_counts, dict) else None
+
+        committee_score_payload = calc_committee_score(
+            {
+                "committee_memberships": row["committee_memberships"],
+                "committee_sessions_attended": row.get("committee_sessions_attended"),
+                "committee_total_sessions": row.get("committee_total_sessions"),
+                "committee_count": row.get("committee_count"),
+                "committee_activity_bills_discussed": row.get("committee_activity_bills_discussed"),
+                "committee_activity_bills_sponsored": row.get("committee_activity_bills_sponsored"),
+                "committee_activity_interventions": row.get("committee_activity_interventions"),
+                "committee_topic_counts": row["committee_topic_counts"],
+                "chamber_average_committee_count": averages.get(str(row.get("camara") or ""), 0.0),
+            }
+        )
+        row["committee_score"] = committee_score_payload["committee_score"]
+        row["committee_score_breakdown"] = committee_score_payload["committee_score_breakdown"]
+    return rows
+
+
 def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: str) -> int:
     clean_camara = camara.upper().strip()
     if clean_camara not in {"DIPUTADO", "SENADOR"}:
@@ -109,10 +252,16 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
     insert_sql = """
     INSERT INTO parlamentarios (
       camara, external_id, nombre, partido, distrito_circunscripcion,
-      region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes, updated_at
+      region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes,
+      committee_memberships_json, committee_sessions_attended, committee_total_sessions, committee_count,
+      committee_activity_bills_discussed, committee_activity_bills_sponsored, committee_activity_interventions,
+      committee_topic_counts, committee_score, committee_score_breakdown, updated_at
     ) VALUES (
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
-      %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s, NOW()
+      %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s,
+      %(committee_memberships_json)s::jsonb, %(committee_sessions_attended)s, %(committee_total_sessions)s, %(committee_count)s,
+      %(committee_activity_bills_discussed)s, %(committee_activity_bills_sponsored)s, %(committee_activity_interventions)s,
+      %(committee_topic_counts)s::jsonb, %(committee_score)s, %(committee_score_breakdown)s::jsonb, NOW()
     )
     ON CONFLICT (camara, external_id) DO UPDATE SET
       nombre = EXCLUDED.nombre,
@@ -124,12 +273,24 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       asistencia_pct = COALESCE(EXCLUDED.asistencia_pct, parlamentarios.asistencia_pct),
       sesiones_totales = COALESCE(EXCLUDED.sesiones_totales, parlamentarios.sesiones_totales),
       sesiones_ausentes = COALESCE(EXCLUDED.sesiones_ausentes, parlamentarios.sesiones_ausentes),
+      committee_memberships_json = COALESCE(EXCLUDED.committee_memberships_json, parlamentarios.committee_memberships_json),
+      committee_sessions_attended = COALESCE(EXCLUDED.committee_sessions_attended, parlamentarios.committee_sessions_attended),
+      committee_total_sessions = COALESCE(EXCLUDED.committee_total_sessions, parlamentarios.committee_total_sessions),
+      committee_count = COALESCE(EXCLUDED.committee_count, parlamentarios.committee_count),
+      committee_activity_bills_discussed = COALESCE(EXCLUDED.committee_activity_bills_discussed, parlamentarios.committee_activity_bills_discussed),
+      committee_activity_bills_sponsored = COALESCE(EXCLUDED.committee_activity_bills_sponsored, parlamentarios.committee_activity_bills_sponsored),
+      committee_activity_interventions = COALESCE(EXCLUDED.committee_activity_interventions, parlamentarios.committee_activity_interventions),
+      committee_topic_counts = COALESCE(EXCLUDED.committee_topic_counts, parlamentarios.committee_topic_counts),
+      committee_score = COALESCE(EXCLUDED.committee_score, parlamentarios.committee_score),
+      committee_score_breakdown = COALESCE(EXCLUDED.committee_score_breakdown, parlamentarios.committee_score_breakdown),
       updated_at = NOW();
     """
 
     if not items:
         # Protección: nunca vaciar una cámara por un scrape vacío/fallido.
         return 0
+
+    estimated_avg = _estimate_committee_avg(items)
 
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -154,6 +315,7 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
                     "sesiones_totales": item.get("sesiones_totales"),
                     "sesiones_ausentes": item.get("sesiones_ausentes"),
                 }
+                params.update(_build_committee_payload(item, estimated_avg))
                 if not params["external_id"] or not params["nombre"]:
                     continue
                 cur.execute(insert_sql, params)
@@ -198,10 +360,16 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
     sql = """
     INSERT INTO parlamentarios (
       camara, external_id, nombre, partido, distrito_circunscripcion,
-      region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes, updated_at
+      region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes,
+      committee_memberships_json, committee_sessions_attended, committee_total_sessions, committee_count,
+      committee_activity_bills_discussed, committee_activity_bills_sponsored, committee_activity_interventions,
+      committee_topic_counts, committee_score, committee_score_breakdown, updated_at
     ) VALUES (
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
-      %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s, NOW()
+      %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s,
+      %(committee_memberships_json)s::jsonb, %(committee_sessions_attended)s, %(committee_total_sessions)s, %(committee_count)s,
+      %(committee_activity_bills_discussed)s, %(committee_activity_bills_sponsored)s, %(committee_activity_interventions)s,
+      %(committee_topic_counts)s::jsonb, %(committee_score)s, %(committee_score_breakdown)s::jsonb, NOW()
     )
     ON CONFLICT (camara, external_id) DO UPDATE SET
       nombre = EXCLUDED.nombre,
@@ -213,10 +381,21 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       asistencia_pct = COALESCE(EXCLUDED.asistencia_pct, parlamentarios.asistencia_pct),
       sesiones_totales = COALESCE(EXCLUDED.sesiones_totales, parlamentarios.sesiones_totales),
       sesiones_ausentes = COALESCE(EXCLUDED.sesiones_ausentes, parlamentarios.sesiones_ausentes),
+      committee_memberships_json = COALESCE(EXCLUDED.committee_memberships_json, parlamentarios.committee_memberships_json),
+      committee_sessions_attended = COALESCE(EXCLUDED.committee_sessions_attended, parlamentarios.committee_sessions_attended),
+      committee_total_sessions = COALESCE(EXCLUDED.committee_total_sessions, parlamentarios.committee_total_sessions),
+      committee_count = COALESCE(EXCLUDED.committee_count, parlamentarios.committee_count),
+      committee_activity_bills_discussed = COALESCE(EXCLUDED.committee_activity_bills_discussed, parlamentarios.committee_activity_bills_discussed),
+      committee_activity_bills_sponsored = COALESCE(EXCLUDED.committee_activity_bills_sponsored, parlamentarios.committee_activity_bills_sponsored),
+      committee_activity_interventions = COALESCE(EXCLUDED.committee_activity_interventions, parlamentarios.committee_activity_interventions),
+      committee_topic_counts = COALESCE(EXCLUDED.committee_topic_counts, parlamentarios.committee_topic_counts),
+      committee_score = COALESCE(EXCLUDED.committee_score, parlamentarios.committee_score),
+      committee_score_breakdown = COALESCE(EXCLUDED.committee_score_breakdown, parlamentarios.committee_score_breakdown),
       updated_at = NOW();
     """
 
     processed = 0
+    estimated_avg = _estimate_committee_avg(items)
     with get_conn() as conn:
         with conn.cursor() as cur:
             for item in items:
@@ -239,6 +418,7 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
                     "sesiones_totales": item.get("sesiones_totales"),
                     "sesiones_ausentes": item.get("sesiones_ausentes"),
                 }
+                params.update(_build_committee_payload(item, estimated_avg))
                 if not params["external_id"] or not params["nombre"]:
                     continue
                 cur.execute(sql, params)
@@ -290,6 +470,16 @@ def list_parliamentarians(
       p.asistencia_pct::float AS asistencia_pct,
       p.sesiones_totales,
       p.sesiones_ausentes,
+      p.committee_memberships_json AS committee_memberships,
+      p.committee_sessions_attended,
+      p.committee_total_sessions,
+      p.committee_count,
+      p.committee_activity_bills_discussed,
+      p.committee_activity_bills_sponsored,
+      p.committee_activity_interventions,
+      p.committee_topic_counts,
+      p.committee_score::float AS committee_score,
+      p.committee_score_breakdown,
       p.source,
       p.updated_at
     FROM parlamentarios p
@@ -307,6 +497,9 @@ def list_parliamentarians(
 
     if unique_people and not camara:
         out = _dedup_by_current_role(out)
+
+    averages = _chamber_avg_committee_counts()
+    out = _attach_committee_scores(out, averages)
 
     return out[: params["limit"]]
 
@@ -386,7 +579,13 @@ def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:
     SELECT
       id, camara, external_id, nombre, partido, distrito_circunscripcion,
       region, periodo, asistencia_pct::float AS asistencia_pct,
-      sesiones_totales, sesiones_ausentes, source, created_at, updated_at
+      sesiones_totales, sesiones_ausentes,
+      committee_memberships_json AS committee_memberships,
+      committee_sessions_attended, committee_total_sessions, committee_count,
+      committee_activity_bills_discussed, committee_activity_bills_sponsored,
+      committee_activity_interventions, committee_topic_counts,
+      committee_score::float AS committee_score, committee_score_breakdown,
+      source, created_at, updated_at
     FROM parlamentarios
     WHERE id = %(id)s
     LIMIT 1;
@@ -395,7 +594,11 @@ def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(sql, {"id": parliamentarian_id})
             row = cur.fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    out = dict(row)
+    averages = _chamber_avg_committee_counts()
+    return _attach_committee_scores([out], averages)[0]
 
 
 def count_by_camara() -> Dict[str, int]:
