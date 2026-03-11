@@ -33,9 +33,9 @@ a {
 }
 
 main {
-  max-width: 980px;
+  width: min(94vw, 1480px);
   margin: 0 auto;
-  padding: 1.2rem 0.9rem 2.2rem;
+  padding: 1.1rem 0.8rem 2.2rem;
 }
 
 .hero {
@@ -218,23 +218,36 @@ select {
 table {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th,
 td {
   text-align: left;
-  padding: 0.62rem;
+  padding: 0.5rem 0.45rem;
   border-bottom: 1px solid #eaecf0;
-  white-space: nowrap;
-  font-size: 0.9rem;
+  white-space: normal;
+  word-break: break-word;
+  font-size: 0.84rem;
+  line-height: 1.22;
+  vertical-align: top;
 }
 
 th {
-  font-size: 0.77rem;
+  font-size: 0.72rem;
   color: #344054;
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+
+.table-card th:nth-child(1), .table-card td:nth-child(1) { width: 7%; }
+.table-card th:nth-child(2), .table-card td:nth-child(2) { width: 22%; }
+.table-card th:nth-child(3), .table-card td:nth-child(3) { width: 10%; }
+.table-card th:nth-child(4), .table-card td:nth-child(4) { width: 12%; }
+.table-card th:nth-child(5), .table-card td:nth-child(5) { width: 18%; }
+.table-card th:nth-child(6), .table-card td:nth-child(6) { width: 14%; }
+.table-card th:nth-child(7), .table-card td:nth-child(7) { width: 9%; }
+.table-card th:nth-child(8), .table-card td:nth-child(8) { width: 8%; }
 
 .row-name {
   font-weight: 700;
@@ -477,6 +490,20 @@ th {
 }
 
 @media (max-width: 740px) {
+  main {
+    width: min(97vw, 740px);
+    padding: 0.95rem 0.45rem 1.6rem;
+  }
+
+  table {
+    table-layout: auto;
+  }
+
+  .table-card th,
+  .table-card td {
+    width: auto;
+  }
+
   .score-bar-row {
     grid-template-columns: 1fr;
   }
