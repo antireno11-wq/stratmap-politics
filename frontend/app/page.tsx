@@ -3,15 +3,76 @@ import Link from "next/link";
 import { getParliamentarians } from "../lib/api";
 import { computeTransparencyScore, scoreTier } from "../lib/scoring";
 
-type SortBy = "score" | "nombre" | "region" | "asistencia" | "camara";
+type SortBy =
+  | "score"
+  | "nombre"
+  | "camara"
+  | "partido"
+  | "distrito"
+  | "region"
+  | "asistencia"
+  | "sesiones";
+type SortOrder = "asc" | "desc";
 
-function sortRows(rows: any[], sortBy: SortBy) {
+function isSortBy(value: string): value is SortBy {
+  return ["score", "nombre", "camara", "partido", "distrito", "region", "asistencia", "sesiones"].includes(value);
+}
+
+function isSortOrder(value: string): value is SortOrder {
+  return value === "asc" || value === "desc";
+}
+
+function defaultOrderFor(sortBy: SortBy): SortOrder {
+  return ["nombre", "camara", "partido", "distrito", "region"].includes(sortBy) ? "asc" : "desc";
+}
+
+function normalizeText(value: unknown) {
+  const text = String(value ?? "").trim();
+  if (!text || text.toLowerCase() === "sin dato") return "";
+  return text;
+}
+
+function compareText(a: unknown, b: unknown) {
+  const va = normalizeText(a);
+  const vb = normalizeText(b);
+  if (!va && !vb) return 0;
+  if (!va) return 1;
+  if (!vb) return -1;
+  return va.localeCompare(vb, "es", { sensitivity: "base" });
+}
+
+function compareNullableNumber(a: unknown, b: unknown) {
+  const na = a == null ? null : Number(a);
+  const nb = b == null ? null : Number(b);
+  const va = na != null && Number.isFinite(na) ? na : null;
+  const vb = nb != null && Number.isFinite(nb) ? nb : null;
+
+  if (va == null && vb == null) return 0;
+  if (va == null) return 1;
+  if (vb == null) return -1;
+  return va - vb;
+}
+
+function sortRows(rows: any[], sortBy: SortBy, sortOrder: SortOrder) {
   const out = [...rows];
-  if (sortBy === "score") return out.sort((a, b) => b.score - a.score || a.nombre.localeCompare(b.nombre));
-  if (sortBy === "nombre") return out.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
-  if (sortBy === "region") return out.sort((a, b) => a.region.localeCompare(b.region, "es"));
-  if (sortBy === "asistencia") return out.sort((a, b) => (b.asistencia_pct ?? -1) - (a.asistencia_pct ?? -1));
-  return out.sort((a, b) => a.camara.localeCompare(b.camara, "es") || a.nombre.localeCompare(b.nombre, "es"));
+  const direction = sortOrder === "asc" ? 1 : -1;
+
+  return out.sort((a, b) => {
+    let result = 0;
+    if (sortBy === "score") result = compareNullableNumber(a.score, b.score);
+    if (sortBy === "nombre") result = compareText(a.nombre, b.nombre);
+    if (sortBy === "camara") result = compareText(a.camara, b.camara);
+    if (sortBy === "partido") result = compareText(a.partido, b.partido);
+    if (sortBy === "distrito") result = compareText(a.distrito_circunscripcion, b.distrito_circunscripcion);
+    if (sortBy === "region") result = compareText(a.region, b.region);
+    if (sortBy === "asistencia") result = compareNullableNumber(a.asistencia_pct, b.asistencia_pct);
+    if (sortBy === "sesiones") result = compareNullableNumber(a.sesiones_totales, b.sesiones_totales);
+
+    if (result === 0) {
+      return compareText(a.nombre, b.nombre);
+    }
+    return result * direction;
+  });
 }
 
 export default async function Home({ searchParams }: { searchParams: Record<string, string | string[] | undefined> }) {
@@ -19,13 +80,18 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
   const partido = typeof searchParams.partido === "string" ? searchParams.partido : "";
   const region = typeof searchParams.region === "string" ? searchParams.region : "";
   const camara = typeof searchParams.camara === "string" ? searchParams.camara : "";
-  const sortBy = (typeof searchParams.sort_by === "string" ? searchParams.sort_by : "score") as SortBy;
+  const rawSortBy = typeof searchParams.sort_by === "string" ? searchParams.sort_by : "score";
+  const sortBy: SortBy = isSortBy(rawSortBy) ? rawSortBy : "score";
+  const rawSortOrder = typeof searchParams.sort_order === "string" ? searchParams.sort_order : defaultOrderFor(sortBy);
+  const sortOrder: SortOrder = isSortOrder(rawSortOrder) ? rawSortOrder : defaultOrderFor(sortBy);
 
   const params = new URLSearchParams();
   if (q) params.set("q", q);
   if (partido) params.set("partido", partido);
   if (region) params.set("region", region);
   if (camara) params.set("camara", camara);
+  params.set("sort_by", sortBy);
+  params.set("sort_order", sortOrder);
 
   const data = await getParliamentarians(params.toString());
   const diputados = data.counters?.DIPUTADO ?? 0;
@@ -36,9 +102,9 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
     score: computeTransparencyScore(row),
   }));
 
-  const sortedRows = sortRows(rows, sortBy);
+  const sortedRows = sortRows(rows, sortBy, sortOrder);
   const avgScore = rows.length === 0 ? 0 : rows.reduce((acc: number, row: any) => acc + row.score, 0) / rows.length;
-  const top10 = [...sortedRows].slice(0, 10);
+  const top10 = sortRows(rows, "score", "desc").slice(0, 10);
 
   return (
     <main>
@@ -85,7 +151,21 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
           <input name="partido" placeholder="Partido" defaultValue={partido} />
           <input name="region" placeholder="Región" defaultValue={region} />
           <input name="camara" placeholder="Cámara (DIPUTADO o SENADOR)" defaultValue={camara} />
-          <input name="sort_by" placeholder="Orden (score,nombre,region,asistencia,camara)" defaultValue={sortBy} />
+          <select name="sort_by" defaultValue={sortBy}>
+            <option value="score">Score</option>
+            <option value="nombre">Nombre</option>
+            <option value="camara">Cámara</option>
+            <option value="partido">Partido</option>
+            <option value="distrito">Distrito/Circunscripción</option>
+            <option value="region">Región</option>
+            <option value="asistencia">Asistencia</option>
+            <option value="sesiones">Sesiones</option>
+          </select>
+          <select name="sort_order" defaultValue={sortOrder}>
+            <option value="asc">Ascendente</option>
+            <option value="desc">Descendente</option>
+          </select>
+          <button className="filter-submit" type="submit">Aplicar</button>
         </form>
       </section>
 
