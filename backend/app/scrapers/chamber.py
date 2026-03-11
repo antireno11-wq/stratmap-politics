@@ -325,6 +325,21 @@ def _clean_person_name(name: str) -> str:
     return raw.strip(" -")
 
 
+def _manual_territory_overrides() -> Dict[str, Dict[str, str]]:
+    # Casos puntuales donde Cámara publica ficha sin territorio en endpoints de asistencia/ficha.
+    # Fuente verificada en biografías parlamentarias oficiales.
+    return {
+        "1115": {
+            "distrito_circunscripcion": "Distrito 17",
+            "region": "Región del Maule",
+        },
+        "1124": {
+            "distrito_circunscripcion": "Distrito 7",
+            "region": "Región de Valparaíso",
+        },
+    }
+
+
 def _build_valid_deputy_name_set() -> set[str]:
     deputies = fetch_deputies_periodo_actual(enrich_profile_page=False)
     out: set[str] = set()
@@ -434,6 +449,16 @@ def fetch_deputies_periodo_actual(
                 d["periodo"] = str(page_extra["periodo"])
             if page_extra.get("asistencia_pct") is not None:
                 d["asistencia_pct"] = page_extra["asistencia_pct"]
+    manual_overrides = _manual_territory_overrides()
+    for d in out:
+        override = manual_overrides.get(d.get("external_id", ""))
+        if not override:
+            continue
+        if _is_missing(d.get("distrito_circunscripcion")) and not _is_missing(override.get("distrito_circunscripcion")):
+            d["distrito_circunscripcion"] = override["distrito_circunscripcion"]
+        if _is_missing(d.get("region")) and not _is_missing(override.get("region")):
+            d["region"] = override["region"]
+
     return out
 
 
