@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg
 from psycopg.rows import dict_row
-from .scoring import calc_committee_score
+from .scoring import calc_committee_score, calc_public_score
 
 
 def _db_url() -> str:
@@ -245,6 +245,15 @@ def _attach_committee_scores(rows: List[Dict[str, Any]], averages: Dict[str, flo
         )
         row["committee_score"] = committee_score_payload["committee_score"]
         row["committee_score_breakdown"] = committee_score_payload["committee_score_breakdown"]
+        public_score_payload = calc_public_score(
+            {
+                "attendance_pct": row.get("asistencia_pct"),
+                "committee_score": row.get("committee_score"),
+            }
+        )
+        row["final_score"] = public_score_payload["final_score"]
+        row["score_components"] = public_score_payload["components"]
+        row["score_applicable_weight_sum"] = public_score_payload["applicable_weight_sum"]
     return rows
 
 

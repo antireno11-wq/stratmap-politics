@@ -35,9 +35,11 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
   const p = data.parlamentario;
 
   const scoreBreakdown = computePublicScoreBreakdown(p);
-  const score = scoreBreakdown.total_score;
+  const score = scoreBreakdown.total_score ?? 0;
   const attendance = scoreBreakdown.attendance_score;
   const committeeScore = scoreBreakdown.committee_score;
+  const attendanceValue = attendance ?? 0;
+  const committeeValue = committeeScore ?? 0;
   const biography = safeBiography(p.biografia);
   const rawBiographyUrl = String(p.biografia_url ?? "").trim();
   const biographyUrl = !rawBiographyUrl || rawBiographyUrl === "Sin dato" ? null : rawBiographyUrl;
@@ -82,7 +84,9 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
       <div className="grid kpis profile-kpis">
         <article className="metric-box">
           <div className="metric-label">Score público</div>
-          <div className={`metric-value score ${scoreTier(score)}`}>{score.toFixed(2)}</div>
+          <div className={`metric-value score ${scoreTier(score)}`}>
+            {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(2)}
+          </div>
           <div className="progress">
             <span style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
           </div>
@@ -90,9 +94,9 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
 
         <article className="metric-box">
           <div className="metric-label">Asistencia</div>
-          <div className="metric-value">{p.asistencia_pct == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
+          <div className="metric-value">{attendance == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
           <div className="progress">
-            <span style={{ width: `${Math.max(0, Math.min(100, attendance))}%` }} />
+            <span style={{ width: `${Math.max(0, Math.min(100, attendanceValue))}%` }} />
           </div>
         </article>
 
@@ -140,15 +144,15 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             </div>
           </div>
           <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(attendance, "#0ea5e9")}>
+            <div className="score-ring" style={ringStyle(attendanceValue, "#0ea5e9")}>
               <div className="score-ring-inner">
-                <div className="score-ring-value">{p.asistencia_pct == null ? "N/D" : attendance.toFixed(1)}</div>
+                <div className="score-ring-value">{attendance == null ? "N/D" : attendance.toFixed(1)}</div>
                 <div className="score-ring-caption">Asistencia</div>
               </div>
             </div>
           </div>
           <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(committeeScore ?? 0, "#14b8a6")}>
+            <div className="score-ring" style={ringStyle(committeeValue, "#14b8a6")}>
               <div className="score-ring-inner">
                 <div className="score-ring-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(1)}</div>
                 <div className="score-ring-caption">Comisiones</div>
@@ -173,7 +177,7 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             </div>
             <div className="score-legend-item total">
               <span className="legend-dot total" />
-              <span>Total score: {score.toFixed(2)}</span>
+              <span>Total score: {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -234,19 +238,19 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             <div className="score-bar-track">
               <span style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
             </div>
-            <div className="score-bar-value">{score.toFixed(2)}</div>
+            <div className="score-bar-value">{scoreBreakdown.total_score == null ? "N/D" : score.toFixed(2)}</div>
           </div>
           <div className="score-bar-row">
             <div className="score-bar-label">Asistencia</div>
             <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, attendance))}%` }} />
+              <span style={{ width: `${Math.max(0, Math.min(100, attendanceValue))}%` }} />
             </div>
-            <div className="score-bar-value">{p.asistencia_pct == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
+            <div className="score-bar-value">{attendance == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
           </div>
           <div className="score-bar-row">
             <div className="score-bar-label">Score comisiones</div>
             <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, committeeScore ?? 0))}%` }} />
+              <span style={{ width: `${Math.max(0, Math.min(100, committeeValue))}%` }} />
             </div>
             <div className="score-bar-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(2)}</div>
           </div>

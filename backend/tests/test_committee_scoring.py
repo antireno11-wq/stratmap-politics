@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.app.scoring import calc_committee_score, calc_scores
+from backend.app.scoring import calc_committee_score, calc_public_score, calc_scores
 
 
 class CommitteeScoringTests(unittest.TestCase):
@@ -70,14 +70,12 @@ class CommitteeScoringTests(unittest.TestCase):
         result = calc_committee_score(metrics)
         breakdown = result["committee_score_breakdown"]
 
-        self.assertAlmostEqual(
-            breakdown["normalized"]["committee_activity_score"],
-            0.0,
-            places=2,
-        )
+        self.assertIsNone(breakdown["normalized"]["committee_activity_score"])
+        self.assertFalse(breakdown["components"]["committee_activity"]["applicable"])
         self.assertIsNone(
             breakdown["raw"]["committee_activity_index"],
         )
+        self.assertIsNotNone(result["committee_score"])
         self.assertGreaterEqual(result["committee_score"], 0.0)
         self.assertLessEqual(result["committee_score"], 100.0)
 
@@ -106,9 +104,35 @@ class CommitteeScoringTests(unittest.TestCase):
         self.assertIn("committee_score", result)
         self.assertIn("committee_score_breakdown", result)
         self.assertIn("commissions_score", result)
+        self.assertIn("components", result)
         self.assertAlmostEqual(result["committee_score"], result["commissions_score"], places=2)
+        self.assertTrue(result["components"]["committees"]["applicable"])
+
+    def test_total_scoring_excludes_non_applicable_components(self) -> None:
+        metrics = {
+            "attendance_pct": 84,
+            "voting_participation_pct": None,
+            "party_alignment_pct": None,
+            "bills_presented": None,
+            "bills_approved": None,
+            "bills_in_progress": None,
+            "lobby_compliance_pct": None,
+            "meetings_registered": None,
+            "official_trips": None,
+            "committee_memberships": [],
+            "committee_count": 0,
+        }
+        result = calc_scores(metrics)
+        self.assertEqual(result["total_score"], 84.0)
+        self.assertTrue(result["components"]["attendance"]["applicable"])
+        self.assertFalse(result["components"]["committees"]["applicable"])
+
+    def test_public_score_marks_committee_not_applicable(self) -> None:
+        payload = calc_public_score({"attendance_pct": 90, "committee_score": None})
+        self.assertEqual(payload["final_score"], 90.0)
+        self.assertTrue(payload["components"]["attendance"]["applicable"])
+        self.assertFalse(payload["components"]["committees"]["applicable"])
 
 
 if __name__ == "__main__":
     unittest.main()
-
