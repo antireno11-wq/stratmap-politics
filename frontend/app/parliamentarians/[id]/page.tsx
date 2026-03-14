@@ -48,7 +48,7 @@ function donutSegments(items: Array<{ value: number; color: string }>, radius: n
   });
 }
 
-export default async function ParliamentarianPage({ params }: { params: { id: string } }) {
+export default async function ParliamentarianPage({ params }: any) {
   const data = await getParliamentarian(params.id);
   const p = data.parlamentario;
 

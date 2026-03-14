@@ -43,11 +43,7 @@ function rankRows(rows: any[], order: "asc" | "desc") {
   return sorted.slice(0, 5);
 }
 
-export default async function Home({
-  searchParams,
-}: {
-  searchParams: Record<string, string | string[] | undefined>;
-}) {
+export default async function Home({ searchParams }: any) {
   const selectedParty = typeof searchParams.partido === "string" ? searchParams.partido : "";
   const selectedRegion = typeof searchParams.region === "string" ? searchParams.region : "";
 
