@@ -1,16 +1,12 @@
-import Image from "next/image";
 import Link from "next/link";
-import { getParliamentarians } from "../lib/api";
-import { computeTransparencyScore, scoreTier } from "../lib/scoring";
+import Image from "next/image";
+
+import { getParliamentarians } from "../../lib/api";
 
 function normalizeText(value: unknown) {
   const text = String(value ?? "").trim();
   if (!text || text.toLowerCase() === "sin dato") return "";
   return text;
-}
-
-function isNonEmptyString(value: string): value is string {
-  return value.length > 0;
 }
 
 function compareText(a: unknown, b: unknown) {
@@ -28,14 +24,9 @@ function uniqueSortedStrings(values: unknown[]): string[] {
   return out.sort((a, b) => compareText(a, b));
 }
 
-function formatMaybeNumber(value: number | null, digits = 2) {
+function pct(value: number | null) {
   if (value == null || Number.isNaN(value)) return "N/D";
-  return value.toFixed(digits);
-}
-
-function clampPercent(value: number | null) {
-  if (value == null || Number.isNaN(value)) return 0;
-  return Math.max(0, Math.min(100, value));
+  return `${value.toFixed(2)}%`;
 }
 
 function averageOf(values: Array<number | null>) {
@@ -44,69 +35,72 @@ function averageOf(values: Array<number | null>) {
   return clean.reduce((acc, value) => acc + value, 0) / clean.length;
 }
 
-function rankRows(rows: any[], order: "asc" | "desc") {
-  const scored = rows.filter((row) => row.score != null);
-  const sorted = [...scored].sort((a, b) => {
-    const diff = Number(a.score) - Number(b.score);
-    if (diff === 0) return compareText(String(a.nombre ?? ""), String(b.nombre ?? ""));
-    return order === "desc" ? -diff : diff;
-  });
-  return sorted.slice(0, 5);
+function clampPercent(value: number | null) {
+  if (value == null || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(100, value));
 }
 
-export default async function Home({ searchParams }: any) {
+function attendanceTone(value: number | null) {
+  if (value == null) return "tone-neutral";
+  if (value >= 95) return "tone-positive";
+  if (value < 85) return "tone-negative";
+  return "tone-neutral";
+}
+
+export default async function AttendancePage({ searchParams }: any) {
+  const selectedCamera = typeof searchParams.camara === "string" ? searchParams.camara : "";
   const selectedParty = typeof searchParams.partido === "string" ? searchParams.partido : "";
   const selectedRegion = typeof searchParams.region === "string" ? searchParams.region : "";
 
   const data = await getParliamentarians("limit=1000&unique_people=true");
-  const baseRows = (data.items || []).map((row: any) => ({
-    ...row,
-    score: computeTransparencyScore(row),
-  }));
+  const baseRows = (data.items || [])
+    .map((row: any) => ({
+      ...row,
+      attendance: row.asistencia_pct == null ? null : Number(row.asistencia_pct),
+      sesionesTotales: row.sesiones_totales == null ? null : Number(row.sesiones_totales),
+      sesionesAusentes: row.sesiones_ausentes == null ? null : Number(row.sesiones_ausentes),
+    }))
+    .filter((row: any) => row.attendance != null);
 
   const partyOptions = uniqueSortedStrings(baseRows.map((row: any) => row.partido));
   const regionOptions = uniqueSortedStrings(baseRows.map((row: any) => row.region));
 
   const filteredRows = baseRows.filter((row: any) => {
+    if (selectedCamera && row.camara !== selectedCamera) return false;
     if (selectedParty && normalizeText(row.partido) !== selectedParty) return false;
     if (selectedRegion && normalizeText(row.region) !== selectedRegion) return false;
     return true;
   });
 
-  const topFive = rankRows(filteredRows, "desc");
-  const bottomFive = rankRows(filteredRows, "asc");
-  const avgScore = averageOf(filteredRows.map((row: any) => row.score ?? null));
-  const avgAttendance = averageOf(
-    filteredRows.map((row: any) => (row.asistencia_pct == null ? null : Number(row.asistencia_pct)))
-  );
-  const avgVoting = averageOf(
-    filteredRows.map((row: any) =>
-      row.voting_participation_pct == null ? null : Number(row.voting_participation_pct)
-    )
-  );
-  const highPerformers = filteredRows.filter((row: any) => row.score != null && row.score >= 80).length;
-  const lowPerformers = filteredRows.filter((row: any) => row.score != null && row.score < 60).length;
-  const tableRows = [...filteredRows].sort((a, b) => {
-    const aScore = a.score == null ? -1 : Number(a.score);
-    const bScore = b.score == null ? -1 : Number(b.score);
-    if (aScore === bScore) return compareText(String(a.nombre ?? ""), String(b.nombre ?? ""));
-    return bScore - aScore;
+  const orderedRows = [...filteredRows].sort((a, b) => {
+    const diff = Number(b.attendance) - Number(a.attendance);
+    if (diff === 0) return compareText(a.nombre, b.nombre);
+    return diff;
   });
+
+  const topFive = orderedRows.slice(0, 5);
+  const bottomFive = [...orderedRows].reverse().slice(0, 5).reverse();
+  const avgAttendance = averageOf(orderedRows.map((row: any) => row.attendance));
+  const deputiesCount = orderedRows.filter((row: any) => row.camara === "DIPUTADO").length;
+  const senatorsCount = orderedRows.filter((row: any) => row.camara === "SENADOR").length;
 
   return (
     <main>
       <section className="hero dashboard-hero">
         <div className="brand-wrap">
           <div>
-            <span className="hero-kicker">Monitoreo Legislativo</span>
-            <h1>Ranking público de desempeño parlamentario</h1>
+            <span className="hero-kicker">Asistencia Congreso</span>
+            <h1>Monitoreo de asistencia parlamentaria</h1>
             <p>
-              Un dashboard de KPIs para detectar rápido quién está arriba, quién está abajo y cómo se
-              comporta cada bancada por territorio.
+              Una vista dedicada para revisar asistencia oficial, sesiones registradas y ausencias del Congreso
+              sin pasar por el ranking general.
             </p>
             <div className="hero-actions">
-              <Link className="hero-action-link hero-action-link-primary" href="/attendance">
-                Ver página de asistencia
+              <Link className="hero-action-link hero-action-link-primary" href="/">
+                Volver al ranking general
+              </Link>
+              <Link className="hero-action-link" href="/attendance">
+                Reiniciar filtros
               </Link>
             </div>
           </div>
@@ -123,24 +117,24 @@ export default async function Home({ searchParams }: any) {
 
       <section className="dashboard-grid dashboard-overview">
         <article className="card kpi-panel">
-          <div className="kpi-label">Parlamentarios visibles</div>
-          <div className="kpi-value">{filteredRows.length}</div>
-          <div className="kpi-foot">Sobre {data.total_global ?? data.count} registros públicos</div>
-        </article>
-        <article className="card kpi-panel">
-          <div className="kpi-label">Score promedio</div>
-          <div className="kpi-value">{formatMaybeNumber(avgScore)}</div>
-          <div className="kpi-foot kpi-good">Verde = mejor lectura global</div>
+          <div className="kpi-label">Parlamentarios con asistencia</div>
+          <div className="kpi-value">{orderedRows.length}</div>
+          <div className="kpi-foot">Solo perfiles con asistencia oficial disponible</div>
         </article>
         <article className="card kpi-panel">
           <div className="kpi-label">Asistencia promedio</div>
-          <div className="kpi-value">{avgAttendance == null ? "N/D" : `${avgAttendance.toFixed(2)}%`}</div>
-          <div className="kpi-foot">Promedio sobre quienes tienen dato</div>
+          <div className="kpi-value">{pct(avgAttendance)}</div>
+          <div className="kpi-foot kpi-good">Lectura consolidada del filtro activo</div>
         </article>
         <article className="card kpi-panel">
-          <div className="kpi-label">Participación en votaciones</div>
-          <div className="kpi-value">{avgVoting == null ? "N/D" : `${avgVoting.toFixed(2)}%`}</div>
-          <div className="kpi-foot">No reemplaza asistencia, la complementa</div>
+          <div className="kpi-label">Diputados visibles</div>
+          <div className="kpi-value">{deputiesCount}</div>
+          <div className="kpi-foot">Dentro del filtro actual</div>
+        </article>
+        <article className="card kpi-panel">
+          <div className="kpi-label">Senadores visibles</div>
+          <div className="kpi-value">{senatorsCount}</div>
+          <div className="kpi-foot">Dentro del filtro actual</div>
         </article>
       </section>
 
@@ -148,11 +142,19 @@ export default async function Home({ searchParams }: any) {
         <article className="card filter-panel">
           <div className="panel-header">
             <div>
-              <h3 className="filter-title">Filtros</h3>
-              <p className="panel-subtitle">Cruza partido y región para rehacer el ranking en tiempo real.</p>
+              <h3 className="filter-title">Filtros de asistencia</h3>
+              <p className="panel-subtitle">Aísla cámara, partido o región para reconstruir la tabla.</p>
             </div>
           </div>
           <form className="dashboard-filters" method="GET">
+            <label className="filter-field">
+              <span>Cámara</span>
+              <select name="camara" defaultValue={selectedCamera}>
+                <option value="">Ambas</option>
+                <option value="DIPUTADO">Diputados</option>
+                <option value="SENADOR">Senadores</option>
+              </select>
+            </label>
             <label className="filter-field">
               <span>Partido</span>
               <select name="partido" defaultValue={selectedParty}>
@@ -177,30 +179,20 @@ export default async function Home({ searchParams }: any) {
             </label>
             <div className="filter-actions">
               <button className="filter-submit" type="submit">
-                Actualizar ranking
+                Actualizar asistencia
               </button>
-              <Link className="filter-reset" href="/">
+              <Link className="filter-reset" href="/attendance">
                 Limpiar filtros
               </Link>
             </div>
           </form>
-          <div className="status-grid">
-            <div className="status-pill positive">
-              <strong>{highPerformers}</strong>
-              <span>sobre 80 puntos</span>
-            </div>
-            <div className="status-pill negative">
-              <strong>{lowPerformers}</strong>
-              <span>bajo 60 puntos</span>
-            </div>
-          </div>
         </article>
 
         <article className="card rank-card rank-card-positive">
           <div className="panel-header">
             <div>
-              <h3 className="filter-title">Top 5</h3>
-              <p className="panel-subtitle">Los mejores calificados dentro del filtro activo.</p>
+              <h3 className="filter-title">Top asistencia</h3>
+              <p className="panel-subtitle">Los registros más altos dentro del filtro activo.</p>
             </div>
           </div>
           <div className="rank-list">
@@ -210,13 +202,13 @@ export default async function Home({ searchParams }: any) {
                 <div className="rank-copy">
                   <div className="rank-name">{row.nombre}</div>
                   <div className="rank-meta">
-                    {row.partido} | {row.region}
+                    {row.camara} | {row.partido}
                   </div>
                   <div className="rank-bar">
-                    <span style={{ width: `${clampPercent(Number(row.score))}%` }} />
+                    <span style={{ width: `${clampPercent(row.attendance)}%` }} />
                   </div>
                 </div>
-                <div className={`rank-score ${scoreTier(Number(row.score))}`}>{Number(row.score).toFixed(1)}</div>
+                <div className="rank-score alto">{pct(row.attendance)}</div>
               </Link>
             ))}
           </div>
@@ -225,8 +217,8 @@ export default async function Home({ searchParams }: any) {
         <article className="card rank-card rank-card-negative">
           <div className="panel-header">
             <div>
-              <h3 className="filter-title">Bottom 5</h3>
-              <p className="panel-subtitle">Los puntajes más bajos para detectar zonas de alerta.</p>
+              <h3 className="filter-title">Bottom asistencia</h3>
+              <p className="panel-subtitle">Los niveles más bajos para detectar alertas rápidas.</p>
             </div>
           </div>
           <div className="rank-list">
@@ -236,13 +228,13 @@ export default async function Home({ searchParams }: any) {
                 <div className="rank-copy">
                   <div className="rank-name">{row.nombre}</div>
                   <div className="rank-meta">
-                    {row.partido} | {row.region}
+                    {row.camara} | {row.partido}
                   </div>
                   <div className="rank-bar rank-bar-negative">
-                    <span style={{ width: `${clampPercent(Number(row.score))}%` }} />
+                    <span style={{ width: `${clampPercent(row.attendance)}%` }} />
                   </div>
                 </div>
-                <div className={`rank-score ${scoreTier(Number(row.score))}`}>{Number(row.score).toFixed(1)}</div>
+                <div className="rank-score bajo">{pct(row.attendance)}</div>
               </Link>
             ))}
           </div>
@@ -253,26 +245,23 @@ export default async function Home({ searchParams }: any) {
         <article className="card ranking-chart-card">
           <div className="panel-header">
             <div>
-              <h3 className="filter-title">Lectura rápida del ranking</h3>
-              <p className="panel-subtitle">Las barras dejan claro el desempeño sin depender del texto.</p>
+              <h3 className="filter-title">Lectura rápida</h3>
+              <p className="panel-subtitle">Top 10 por asistencia con una barra visual simple.</p>
             </div>
           </div>
           <div className="score-chart dashboard-score-chart">
-            {tableRows.slice(0, 10).map((row: any) => (
+            {orderedRows.slice(0, 10).map((row: any) => (
               <div key={row.id} className="score-bar-row">
                 <div className="score-bar-label">
                   <strong>{row.nombre}</strong>
-                  <span>{row.partido}</span>
+                  <span>
+                    {row.camara} | {row.region}
+                  </span>
                 </div>
                 <div className="score-bar-track tone-track">
-                  <span
-                    className={row.score != null && row.score >= 80 ? "tone-positive" : row.score != null && row.score < 60 ? "tone-negative" : "tone-neutral"}
-                    style={{ width: `${clampPercent(row.score)}%` }}
-                  />
+                  <span className={attendanceTone(row.attendance)} style={{ width: `${clampPercent(row.attendance)}%` }} />
                 </div>
-                <div className={`score-bar-value ${row.score == null ? "" : `score ${scoreTier(Number(row.score))}`}`}>
-                  {formatMaybeNumber(row.score)}
-                </div>
+                <div className="score-bar-value">{pct(row.attendance)}</div>
               </div>
             ))}
           </div>
@@ -281,39 +270,37 @@ export default async function Home({ searchParams }: any) {
         <article className="card table-card">
           <div className="panel-header">
             <div>
-              <h3 className="filter-title">Listado filtrado</h3>
-              <p className="panel-subtitle">Haz clic en cualquier nombre para abrir la ficha individual.</p>
+              <h3 className="filter-title">Tabla completa de asistencia</h3>
+              <p className="panel-subtitle">Haz clic en el nombre para abrir la ficha individual.</p>
             </div>
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Score</th>
+                  <th>Asistencia</th>
                   <th>Nombre</th>
+                  <th>Cámara</th>
                   <th>Partido</th>
                   <th>Región</th>
-                  <th>Asistencia</th>
-                  <th>Votaciones</th>
+                  <th>Sesiones</th>
+                  <th>Ausencias</th>
                 </tr>
               </thead>
               <tbody>
-                {tableRows.map((row: any) => (
+                {orderedRows.map((row: any) => (
                   <tr key={row.id}>
-                    <td className={row.score == null ? "" : `score ${scoreTier(Number(row.score))}`}>
-                      {formatMaybeNumber(row.score)}
+                    <td className={row.attendance >= 95 ? "score alto" : row.attendance < 85 ? "score bajo" : "score medio"}>
+                      {pct(row.attendance)}
                     </td>
                     <td className="row-name">
                       <Link href={`/parliamentarians/${row.id}`}>{row.nombre}</Link>
                     </td>
+                    <td>{row.camara}</td>
                     <td>{row.partido}</td>
                     <td>{row.region}</td>
-                    <td>{row.asistencia_pct == null ? "N/D" : `${Number(row.asistencia_pct).toFixed(2)}%`}</td>
-                    <td>
-                      {row.voting_participation_pct == null
-                        ? "N/D"
-                        : `${Number(row.voting_participation_pct).toFixed(2)}%`}
-                    </td>
+                    <td>{row.sesionesTotales == null ? "N/D" : row.sesionesTotales}</td>
+                    <td>{row.sesionesAusentes == null ? "N/D" : row.sesionesAusentes}</td>
                   </tr>
                 ))}
               </tbody>

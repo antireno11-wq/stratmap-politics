@@ -107,6 +107,31 @@ main {
   line-height: 1.45;
 }
 
+.hero-actions {
+  display: flex;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.hero-action-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0.72rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fff9;
+  font-weight: 700;
+}
+
+.hero-action-link-primary {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
 .brand-logo {
   flex-shrink: 0;
   border-radius: 18px;
