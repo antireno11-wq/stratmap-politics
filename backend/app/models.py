@@ -20,6 +20,9 @@ class ParliamentarianIn(BaseModel):
     votes_cast_total: Optional[int] = None
     votes_expected_total: Optional[int] = None
     voting_participation_pct: Optional[float] = None
+    votes_yes_total: Optional[int] = None
+    votes_no_total: Optional[int] = None
+    votes_abstention_total: Optional[int] = None
     committee_memberships: Optional[List[Dict[str, Any]]] = None
     committee_sessions_attended: Optional[int] = None
     committee_total_sessions: Optional[int] = None

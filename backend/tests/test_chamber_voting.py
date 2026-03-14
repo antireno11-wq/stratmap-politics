@@ -94,8 +94,12 @@ class ChamberVotingTests(unittest.TestCase):
 
         self.assertEqual(stats_by_id["1115"]["votes_expected"], 2)
         self.assertEqual(stats_by_id["1115"]["votes_cast"], 1)
+        self.assertEqual(stats_by_id["1115"]["votes_yes"], 1)
+        self.assertEqual(stats_by_id["1115"]["votes_no"], 0)
+        self.assertEqual(stats_by_id["1115"]["votes_abstention"], 0)
         self.assertEqual(stats_by_name["mercedes bulnes nunez"]["votes_expected"], 2)
         self.assertEqual(stats_by_name["mercedes bulnes nunez"]["votes_cast"], 1)
+        self.assertEqual(stats_by_name["mercedes bulnes nunez"]["votes_yes"], 1)
         self.assertNotIn("1124", stats_by_id)
 
 

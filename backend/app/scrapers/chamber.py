@@ -386,6 +386,17 @@ def _vote_rows_from_vote_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
     return rows
 
 
+def _normalize_vote_option(option: str) -> str:
+    text = _normalize_text(option)
+    if any(token in text for token in ["afirmativo", "a favor", "si", "sí"]):
+        return "yes"
+    if any(token in text for token in ["negativo", "en contra", "no"]):
+        return "no"
+    if "abst" in text:
+        return "abstention"
+    return "other"
+
+
 def _clean_person_name(name: str) -> str:
     raw = re.sub(r"\s+", " ", (name or "").strip())
     return raw.strip(" -")
@@ -748,8 +759,24 @@ def fetch_voting_stats_by_deputy(
     session_ids = sorted(set(all_sessions), reverse=True)
 
     valid_names = _build_valid_deputy_name_set()
-    stats_by_id: Dict[str, Dict[str, int]] = defaultdict(lambda: {"votes_cast": 0, "votes_expected": 0})
-    stats_by_name: Dict[str, Dict[str, int]] = defaultdict(lambda: {"votes_cast": 0, "votes_expected": 0})
+    stats_by_id: Dict[str, Dict[str, int]] = defaultdict(
+        lambda: {
+            "votes_cast": 0,
+            "votes_expected": 0,
+            "votes_yes": 0,
+            "votes_no": 0,
+            "votes_abstention": 0,
+        }
+    )
+    stats_by_name: Dict[str, Dict[str, int]] = defaultdict(
+        lambda: {
+            "votes_cast": 0,
+            "votes_expected": 0,
+            "votes_yes": 0,
+            "votes_no": 0,
+            "votes_abstention": 0,
+        }
+    )
 
     for sid in session_ids:
         try:
@@ -796,12 +823,25 @@ def fetch_voting_stats_by_deputy(
                 external_id = _normalize_external_id(vote_row.get("external_id"))
                 nombre = _clean_person_name(vote_row.get("nombre", ""))
                 nombre_norm = _normalize_text(nombre)
+                option_key = _normalize_vote_option(vote_row.get("opcion", ""))
                 counted = False
                 if external_id and external_id in present_ids:
                     stats_by_id[external_id]["votes_cast"] += 1
+                    if option_key == "yes":
+                        stats_by_id[external_id]["votes_yes"] += 1
+                    elif option_key == "no":
+                        stats_by_id[external_id]["votes_no"] += 1
+                    elif option_key == "abstention":
+                        stats_by_id[external_id]["votes_abstention"] += 1
                     counted = True
                 if nombre_norm and nombre_norm in present_names:
                     stats_by_name[nombre_norm]["votes_cast"] += 1
+                    if option_key == "yes":
+                        stats_by_name[nombre_norm]["votes_yes"] += 1
+                    elif option_key == "no":
+                        stats_by_name[nombre_norm]["votes_no"] += 1
+                    elif option_key == "abstention":
+                        stats_by_name[nombre_norm]["votes_abstention"] += 1
                     counted = True
                 if counted:
                     continue
@@ -969,12 +1009,30 @@ def build_deputy_profiles(
         ) if include_attendance else {"present": 0, "absent": 0, "total": 0}
         vote_stats = voting_by_id.get(
             deputy["external_id"],
-            voting_by_name.get(deputy_name_norm, {"votes_cast": 0, "votes_expected": 0}),
-        ) if include_attendance else {"votes_cast": 0, "votes_expected": 0}
+            voting_by_name.get(
+                deputy_name_norm,
+                {
+                    "votes_cast": 0,
+                    "votes_expected": 0,
+                    "votes_yes": 0,
+                    "votes_no": 0,
+                    "votes_abstention": 0,
+                },
+            ),
+        ) if include_attendance else {
+            "votes_cast": 0,
+            "votes_expected": 0,
+            "votes_yes": 0,
+            "votes_no": 0,
+            "votes_abstention": 0,
+        }
         total = stats["total"]
         absent = stats["absent"]
         votes_cast = vote_stats["votes_cast"]
         votes_expected = vote_stats["votes_expected"]
+        votes_yes = vote_stats["votes_yes"]
+        votes_no = vote_stats["votes_no"]
+        votes_abstention = vote_stats["votes_abstention"]
         pct_from_sessions = None if total == 0 else round((stats["present"] / total) * 100, 2)
         voting_pct = None if votes_expected == 0 else round((votes_cast / votes_expected) * 100, 2)
         pct_from_profile = deputy.get("asistencia_pct")
@@ -1000,6 +1058,9 @@ def build_deputy_profiles(
                 "votes_cast_total": votes_cast if (include_attendance and votes_expected > 0) else None,
                 "votes_expected_total": votes_expected if (include_attendance and votes_expected > 0) else None,
                 "voting_participation_pct": voting_pct if include_attendance else None,
+                "votes_yes_total": votes_yes if (include_attendance and votes_cast > 0) else None,
+                "votes_no_total": votes_no if (include_attendance and votes_cast > 0) else None,
+                "votes_abstention_total": votes_abstention if (include_attendance and votes_cast > 0) else None,
                 "nombre_normalizado": _normalize_text(deputy["nombre"]),
                 **_empty_committee_fields(),
             }

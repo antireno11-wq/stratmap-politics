@@ -22,12 +22,30 @@ function safeBiography(value: any) {
   return text ? text : null;
 }
 
-function ringStyle(value: number, color: string) {
-  const clamped = Math.max(0, Math.min(100, value));
-  const deg = clamped * 3.6;
-  return {
-    background: `conic-gradient(${color} 0deg ${deg}deg, #e8edf5 ${deg}deg 360deg)`,
-  };
+function pct(value: number | null, digits = 1) {
+  if (value == null || Number.isNaN(value)) return "N/D";
+  return `${value.toFixed(digits)}%`;
+}
+
+function clampPercent(value: number | null) {
+  if (value == null || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function donutSegments(items: Array<{ value: number; color: string }>, radius: number) {
+  const circumference = 2 * Math.PI * radius;
+  let offset = 0;
+  return items.map((item) => {
+    const length = (item.value / 100) * circumference;
+    const segment = {
+      ...item,
+      circumference,
+      dashArray: `${length} ${Math.max(circumference - length, 0)}`,
+      dashOffset: -offset,
+    };
+    offset += length;
+    return segment;
+  });
 }
 
 export default async function ParliamentarianPage({ params }: { params: { id: string } }) {
@@ -39,203 +57,287 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
   const attendance = scoreBreakdown.attendance_score;
   const votingScore = scoreBreakdown.voting_score;
   const committeeScore = scoreBreakdown.committee_score;
-  const attendanceValue = attendance ?? 0;
-  const votingValue = votingScore ?? 0;
-  const committeeValue = committeeScore ?? 0;
   const biography = safeBiography(p.biografia);
   const rawBiographyUrl = String(p.biografia_url ?? "").trim();
   const biographyUrl = !rawBiographyUrl || rawBiographyUrl === "Sin dato" ? null : rawBiographyUrl;
-  const attended =
-    p.sesiones_totales == null || p.sesiones_ausentes == null
+
+  const totalSessions = p.sesiones_totales == null ? null : Number(p.sesiones_totales);
+  const absentSessions = p.sesiones_ausentes == null ? null : Number(p.sesiones_ausentes);
+  const attendedSessions =
+    totalSessions == null || absentSessions == null ? null : Math.max(0, totalSessions - absentSessions);
+  const absentPct =
+    totalSessions == null || absentSessions == null || totalSessions <= 0
       ? null
-      : p.sesiones_totales - p.sesiones_ausentes;
+      : (absentSessions / totalSessions) * 100;
 
-  const hasRegion = safeValue(p.region) !== "Sin dato";
-  const hasDistrict = safeValue(p.distrito_circunscripcion) !== "Sin dato";
+  const votesYes = p.votes_yes_total == null ? 0 : Number(p.votes_yes_total);
+  const votesNo = p.votes_no_total == null ? 0 : Number(p.votes_no_total);
+  const votesAbstention = p.votes_abstention_total == null ? 0 : Number(p.votes_abstention_total);
+  const votesTotal = votesYes + votesNo + votesAbstention;
 
-  const territoryReady = hasRegion && hasDistrict;
-  const weightedAttendance = scoreBreakdown.weighted_attendance;
-  const weightedVoting = scoreBreakdown.weighted_voting;
-  const weightedCommittee = scoreBreakdown.weighted_committee;
-  const attendanceWeightLabel = Math.round(scoreBreakdown.attendance_weight * 100);
-  const votingWeightLabel = Math.round(scoreBreakdown.voting_weight * 100);
-  const committeeWeightLabel = Math.round(scoreBreakdown.committee_weight * 100);
+  const donutData = votesTotal > 0
+    ? donutSegments(
+        [
+          { value: (votesYes / votesTotal) * 100, color: "#16a34a" },
+          { value: (votesNo / votesTotal) * 100, color: "#dc2626" },
+          { value: (votesAbstention / votesTotal) * 100, color: "#f59e0b" },
+        ],
+        68
+      )
+    : [];
+
+  const attendanceBars = [
+    {
+      label: "Asistencia oficial",
+      value: attendance,
+      tone: "positive",
+      caption: totalSessions == null ? "Sin sesiones registradas" : `${attendedSessions ?? 0} de ${totalSessions} sesiones`,
+    },
+    {
+      label: "Sesiones asistidas",
+      value:
+        totalSessions == null || attendedSessions == null || totalSessions <= 0
+          ? null
+          : (attendedSessions / totalSessions) * 100,
+      tone: "positive",
+      caption: attendedSessions == null ? "Sin dato" : `${attendedSessions} asistidas`,
+    },
+    {
+      label: "Inasistencias",
+      value: absentPct,
+      tone: "negative",
+      caption: absentSessions == null ? "Sin dato" : `${absentSessions} ausencias`,
+    },
+  ];
 
   return (
     <main>
       <Link className="top-link" href="/">
-        Volver al listado
+        Volver al ranking
       </Link>
 
-      <section className="hero profile-header">
+      <section className="hero profile-hero">
         <div className="brand-wrap">
           <div>
+            <span className="hero-kicker">Ficha Individual</span>
             <h1 className="profile-name">{p.nombre}</h1>
             <p className="profile-meta">
               {p.camara} | {p.partido} | {p.periodo}
             </p>
+            <div className="profile-pill-row">
+              <span className="profile-pill">{p.region}</span>
+              <span className="profile-pill">{p.distrito_circunscripcion}</span>
+            </div>
           </div>
-          <Image
-            src="/stratmap-politics-logo.svg"
-            alt="Stratmap Politics"
-            width={90}
-            height={90}
-            className="brand-logo"
-          />
+          <div className="profile-score-panel">
+            <Image
+              src="/stratmap-politics-logo.svg"
+              alt="Stratmap Politics"
+              width={82}
+              height={82}
+              className="brand-logo"
+            />
+            <div className={`profile-score-value ${scoreTier(score)}`}>
+              {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(1)}
+            </div>
+            <div className="profile-score-caption">Score público</div>
+          </div>
         </div>
       </section>
 
-      <div className="grid kpis profile-kpis">
-        <article className="metric-box">
-          <div className="metric-label">Score público</div>
-          <div className={`metric-value score ${scoreTier(score)}`}>
-            {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(2)}
-          </div>
-          <div className="progress">
-            <span style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
-          </div>
-        </article>
-
-        <article className="metric-box">
+      <section className="dashboard-grid detail-kpi-grid">
+        <article className="card metric-panel">
           <div className="metric-label">Asistencia</div>
-          <div className="metric-value">{attendance == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
-          <div className="progress">
-            <span style={{ width: `${Math.max(0, Math.min(100, attendanceValue))}%` }} />
-          </div>
+          <div className="metric-value">{pct(attendance)}</div>
         </article>
-
-        <article className="metric-box">
+        <article className="card metric-panel">
+          <div className="metric-label">Participación en votaciones</div>
+          <div className="metric-value">{pct(votingScore)}</div>
+        </article>
+        <article className="card metric-panel">
           <div className="metric-label">Score comisiones</div>
-          <div className="metric-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(2)}</div>
-          <div className="progress">
-            <span style={{ width: `${Math.max(0, Math.min(100, committeeScore ?? 0))}%` }} />
+          <div className="metric-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(1)}</div>
+        </article>
+        <article className="card metric-panel">
+          <div className="metric-label">Historial de votos</div>
+          <div className="metric-value">{votesTotal > 0 ? votesTotal : "N/D"}</div>
+        </article>
+      </section>
+
+      <section className="dashboard-grid detail-analytics-grid">
+        <article className="card analytics-card">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Asistencia</h3>
+              <p className="panel-subtitle">Gráfico de barras para entender rápido presencia y ausencias.</p>
+            </div>
           </div>
-        </article>
-
-        <article className="metric-box">
-          <div className="metric-label">Votaciones</div>
-          <div className="metric-value">{votingScore == null ? "N/D" : `${votingScore.toFixed(2)}%`}</div>
-          <div className="progress">
-            <span style={{ width: `${Math.max(0, Math.min(100, votingValue))}%` }} />
-          </div>
-        </article>
-
-        <article className="metric-box">
-          <div className="metric-label">Sesiones asistidas</div>
-          <div className="metric-value">
-            {attended == null || p.sesiones_totales == null ? "N/D" : `${attended}/${p.sesiones_totales}`}
-          </div>
-        </article>
-
-        <article className="metric-box">
-          <div className="metric-label">Región</div>
-          <div className="metric-value compact">{p.region}</div>
-        </article>
-
-        <article className="metric-box">
-          <div className="metric-label">Distrito/Circunscripción</div>
-          <div className="metric-value compact">{p.distrito_circunscripcion}</div>
-        </article>
-      </div>
-
-      <section className="card score-breakdown-card">
-        <h3 className="filter-title">Cómo Se Calcula El Score</h3>
-        <p className="score-explainer">
-          {scoreBreakdown.total_score == null
-            ? "Aun no hay componentes aplicables suficientes para calcular un score publico."
-            : `Score final = Asistencia x ${scoreBreakdown.attendance_weight.toFixed(2)} + Votaciones x ${scoreBreakdown.voting_weight.toFixed(2)} + Comisiones x ${scoreBreakdown.committee_weight.toFixed(2)}.`}
-        </p>
-
-        <div className="score-rings">
-          <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(score, "#1d4ed8")}>
-              <div className="score-ring-inner">
-                <div className="score-ring-value">
-                  {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(1)}
+          <div className="attendance-chart">
+            {attendanceBars.map((bar) => (
+              <div key={bar.label} className="attendance-row">
+                <div className="attendance-copy">
+                  <strong>{bar.label}</strong>
+                  <span>{bar.caption}</span>
                 </div>
-                <div className="score-ring-caption">Score</div>
+                <div className="attendance-bar-track">
+                  <span
+                    className={bar.tone === "negative" ? "attendance-bar-negative" : "attendance-bar-positive"}
+                    style={{ width: `${clampPercent(bar.value)}%` }}
+                  />
+                </div>
+                <div className="attendance-bar-value">{pct(bar.value)}</div>
               </div>
-            </div>
+            ))}
           </div>
-          <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(attendanceValue, "#0ea5e9")}>
-              <div className="score-ring-inner">
-                <div className="score-ring-value">{attendance == null ? "N/D" : attendance.toFixed(1)}</div>
-                <div className="score-ring-caption">Asistencia</div>
-              </div>
-            </div>
-          </div>
-          <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(votingValue, "#f97316")}>
-              <div className="score-ring-inner">
-                <div className="score-ring-value">{votingScore == null ? "N/D" : votingScore.toFixed(1)}</div>
-                <div className="score-ring-caption">Votaciones</div>
-              </div>
-            </div>
-          </div>
-          <div className="score-ring-box">
-            <div className="score-ring" style={ringStyle(committeeValue, "#14b8a6")}>
-              <div className="score-ring-inner">
-                <div className="score-ring-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(1)}</div>
-                <div className="score-ring-caption">Comisiones</div>
-              </div>
-            </div>
-          </div>
-        </div>
+        </article>
 
-        <div className="score-stack-block">
-          <div className="score-stack-track">
-            <span className="score-segment-att" style={{ width: `${Math.max(0, Math.min(100, weightedAttendance))}%` }} />
-            <span className="score-segment-vot" style={{ width: `${Math.max(0, Math.min(100, weightedVoting))}%` }} />
-            <span className="score-segment-com" style={{ width: `${Math.max(0, Math.min(100, weightedCommittee))}%` }} />
-          </div>
-          <div className="score-legend-grid">
-            <div className="score-legend-item">
-              <span className="legend-dot att" />
-              <span>Aporte Asistencia ({attendanceWeightLabel}%): {weightedAttendance.toFixed(2)}</span>
-            </div>
-            <div className="score-legend-item">
-              <span className="legend-dot vot" />
-              <span>Aporte Votaciones ({votingWeightLabel}%): {weightedVoting.toFixed(2)}</span>
-            </div>
-            <div className="score-legend-item">
-              <span className="legend-dot com" />
-              <span>Aporte Comisiones ({committeeWeightLabel}%): {weightedCommittee.toFixed(2)}</span>
-            </div>
-            <div className="score-legend-item total">
-              <span className="legend-dot total" />
-              <span>Total score: {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(2)}</span>
+        <article className="card analytics-card">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Histórico de votaciones</h3>
+              <p className="panel-subtitle">Circular por opción: A favor, En contra y Abstención.</p>
             </div>
           </div>
-        </div>
+          <div className="vote-donut-layout">
+            <div className="vote-donut-wrap">
+              <svg className="vote-donut" viewBox="0 0 180 180" aria-label="Histórico de votaciones">
+                <circle cx="90" cy="90" r="68" className="vote-donut-base" />
+                {donutData.map((segment, index) => (
+                  <circle
+                    key={`${segment.color}-${index}`}
+                    cx="90"
+                    cy="90"
+                    r="68"
+                    fill="none"
+                    stroke={segment.color}
+                    strokeWidth="18"
+                    strokeLinecap="butt"
+                    strokeDasharray={segment.dashArray}
+                    strokeDashoffset={segment.dashOffset}
+                    transform="rotate(-90 90 90)"
+                  />
+                ))}
+              </svg>
+              <div className="vote-donut-center">
+                <strong>{votesTotal > 0 ? votesTotal : "N/D"}</strong>
+                <span>votos</span>
+              </div>
+            </div>
+
+            <div className="vote-legend">
+              <div className="vote-legend-item">
+                <span className="legend-dot vote-yes" />
+                <div>
+                  <strong>A favor</strong>
+                  <span>
+                    {votesYes} {votesTotal > 0 ? `(${((votesYes / votesTotal) * 100).toFixed(1)}%)` : ""}
+                  </span>
+                </div>
+              </div>
+              <div className="vote-legend-item">
+                <span className="legend-dot vote-no" />
+                <div>
+                  <strong>En contra</strong>
+                  <span>
+                    {votesNo} {votesTotal > 0 ? `(${((votesNo / votesTotal) * 100).toFixed(1)}%)` : ""}
+                  </span>
+                </div>
+              </div>
+              <div className="vote-legend-item">
+                <span className="legend-dot vote-abstention" />
+                <div>
+                  <strong>Abstención</strong>
+                  <span>
+                    {votesAbstention}{" "}
+                    {votesTotal > 0 ? `(${((votesAbstention / votesTotal) * 100).toFixed(1)}%)` : ""}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section className="dashboard-grid detail-secondary-grid">
+        <article className="card analytics-card">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Composición del score</h3>
+              <p className="panel-subtitle">
+                Los pesos se redistribuyen automáticamente entre componentes aplicables.
+              </p>
+            </div>
+          </div>
+          <div className="score-breakdown-list">
+            <div className="score-breakdown-row">
+              <span>Asistencia</span>
+              <strong>{scoreBreakdown.attendance_weight.toFixed(2)}</strong>
+            </div>
+            <div className="score-breakdown-row">
+              <span>Votaciones</span>
+              <strong>{scoreBreakdown.voting_weight.toFixed(2)}</strong>
+            </div>
+            <div className="score-breakdown-row">
+              <span>Comisiones</span>
+              <strong>{scoreBreakdown.committee_weight.toFixed(2)}</strong>
+            </div>
+          </div>
+          <div className="score-stack-block">
+            <div className="score-stack-track">
+              <span className="score-segment-att" style={{ width: `${clampPercent(scoreBreakdown.weighted_attendance)}%` }} />
+              <span className="score-segment-vot" style={{ width: `${clampPercent(scoreBreakdown.weighted_voting)}%` }} />
+              <span className="score-segment-com" style={{ width: `${clampPercent(scoreBreakdown.weighted_committee)}%` }} />
+            </div>
+            <div className="score-legend-grid">
+              <div className="score-legend-item">
+                <span className="legend-dot att" />
+                <span>Aporte asistencia: {scoreBreakdown.weighted_attendance.toFixed(2)}</span>
+              </div>
+              <div className="score-legend-item">
+                <span className="legend-dot vot" />
+                <span>Aporte votaciones: {scoreBreakdown.weighted_voting.toFixed(2)}</span>
+              </div>
+              <div className="score-legend-item">
+                <span className="legend-dot com" />
+                <span>Aporte comisiones: {scoreBreakdown.weighted_committee.toFixed(2)}</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article className="card analytics-card">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Biografía</h3>
+              <p className="panel-subtitle">Contexto básico del parlamentario y fuente oficial.</p>
+            </div>
+          </div>
+          {biography ? <p className="bio-text">{biography}</p> : <p className="profile-meta">Sin biografía disponible.</p>}
+          {biographyUrl ? (
+            <p className="profile-meta">
+              Fuente:{" "}
+              <a href={biographyUrl} target="_blank" rel="noreferrer">
+                Perfil oficial
+              </a>
+            </p>
+          ) : null}
+        </article>
       </section>
 
       <section className="card">
-        <h3 className="filter-title">Biografía</h3>
-        {biography ? (
-          <p className="bio-text">{biography}</p>
-        ) : (
-          <p className="profile-meta">Sin biografía disponible por ahora.</p>
-        )}
-        {biographyUrl ? (
-          <p className="profile-meta">
-            Fuente:{" "}
-            <a href={biographyUrl} target="_blank" rel="noreferrer">
-              Perfil oficial
-            </a>
-          </p>
-        ) : null}
-      </section>
-
-      <section className="card">
-        <h3 className="filter-title">Ficha del Parlamentario</h3>
+        <div className="panel-header">
+          <div>
+            <h3 className="filter-title">Ficha técnica</h3>
+            <p className="panel-subtitle">Metadatos del registro y estado de cobertura.</p>
+          </div>
+        </div>
         <div className="detail-grid">
           <div className="detail-item">
             <div className="detail-label">ID interno</div>
             <div className="detail-value">{safeValue(p.id)}</div>
           </div>
           <div className="detail-item">
-            <div className="detail-label">ID externo Cámara/Senado</div>
+            <div className="detail-label">ID externo</div>
             <div className="detail-value">{safeValue(p.external_id)}</div>
           </div>
           <div className="detail-item">
@@ -247,67 +349,14 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             <div className="detail-value">{safeDate(p.updated_at)}</div>
           </div>
           <div className="detail-item">
-            <div className="detail-label">Creación de registro</div>
+            <div className="detail-label">Creación del registro</div>
             <div className="detail-value">{safeDate(p.created_at)}</div>
           </div>
           <div className="detail-item">
-            <div className="detail-label">Estado territorial</div>
-            <div className="detail-value">{territoryReady ? "Completo" : "Incompleto"}</div>
-          </div>
-        </div>
-      </section>
-
-      <section className="card chart-card">
-        <h3 className="filter-title">Indicadores</h3>
-        <div className="score-chart">
-          <div className="score-bar-row">
-            <div className="score-bar-label">Score público</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, score))}%` }} />
+            <div className="detail-label">Sesiones asistidas</div>
+            <div className="detail-value">
+              {attendedSessions == null || totalSessions == null ? "N/D" : `${attendedSessions}/${totalSessions}`}
             </div>
-            <div className="score-bar-value">{scoreBreakdown.total_score == null ? "N/D" : score.toFixed(2)}</div>
-          </div>
-          <div className="score-bar-row">
-            <div className="score-bar-label">Asistencia</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, attendanceValue))}%` }} />
-            </div>
-            <div className="score-bar-value">{attendance == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
-          </div>
-          <div className="score-bar-row">
-            <div className="score-bar-label">Votaciones</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, votingValue))}%` }} />
-            </div>
-            <div className="score-bar-value">{votingScore == null ? "N/D" : `${votingScore.toFixed(2)}%`}</div>
-          </div>
-          <div className="score-bar-row">
-            <div className="score-bar-label">Score comisiones</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, committeeValue))}%` }} />
-            </div>
-            <div className="score-bar-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(2)}</div>
-          </div>
-          <div className="score-bar-row">
-            <div className="score-bar-label">Aporte asistencia</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, weightedAttendance))}%` }} />
-            </div>
-            <div className="score-bar-value">{weightedAttendance.toFixed(2)}</div>
-          </div>
-          <div className="score-bar-row">
-            <div className="score-bar-label">Aporte votaciones</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, weightedVoting))}%` }} />
-            </div>
-            <div className="score-bar-value">{weightedVoting.toFixed(2)}</div>
-          </div>
-          <div className="score-bar-row">
-            <div className="score-bar-label">Aporte comisiones</div>
-            <div className="score-bar-track">
-              <span style={{ width: `${Math.max(0, Math.min(100, weightedCommittee))}%` }} />
-            </div>
-            <div className="score-bar-value">{weightedCommittee.toFixed(2)}</div>
           </div>
         </div>
       </section>

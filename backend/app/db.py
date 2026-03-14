@@ -43,6 +43,9 @@ def init_db() -> None:
         votes_cast_total INTEGER NULL,
         votes_expected_total INTEGER NULL,
         voting_participation_pct NUMERIC(5,2) NULL,
+        votes_yes_total INTEGER NULL,
+        votes_no_total INTEGER NULL,
+        votes_abstention_total INTEGER NULL,
         voting_score NUMERIC(5,2) NULL,
         voting_score_breakdown JSONB NULL,
         committee_memberships_json JSONB NULL,
@@ -88,6 +91,9 @@ def init_db() -> None:
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS votes_cast_total INTEGER NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS votes_expected_total INTEGER NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS voting_participation_pct NUMERIC(5,2) NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS votes_yes_total INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS votes_no_total INTEGER NULL;")
+            cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS votes_abstention_total INTEGER NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS voting_score NUMERIC(5,2) NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS voting_score_breakdown JSONB NULL;")
             cur.execute("ALTER TABLE parlamentarios ADD COLUMN IF NOT EXISTS biografia TEXT NULL;")
@@ -226,6 +232,9 @@ def _build_voting_payload(item: Dict[str, Any]) -> Dict[str, Any]:
         if _safe_int(item.get("votes_expected_total")) is not None
         else _safe_int(raw.get("votes_expected_total")),
         "voting_participation_pct": _safe_float(raw.get("voting_participation_pct")),
+        "votes_yes_total": _safe_int(item.get("votes_yes_total")),
+        "votes_no_total": _safe_int(item.get("votes_no_total")),
+        "votes_abstention_total": _safe_int(item.get("votes_abstention_total")),
         "voting_score": _safe_float(score_payload.get("voting_score")),
         "voting_score_breakdown": _json_dumps_or_none(score_payload.get("voting_score_breakdown")),
     }
@@ -316,7 +325,9 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       camara, external_id, nombre, partido, distrito_circunscripcion,
       biografia, biografia_url,
       region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes,
-      votes_cast_total, votes_expected_total, voting_participation_pct, voting_score, voting_score_breakdown,
+      votes_cast_total, votes_expected_total, voting_participation_pct,
+      votes_yes_total, votes_no_total, votes_abstention_total,
+      voting_score, voting_score_breakdown,
       committee_memberships_json, committee_sessions_attended, committee_total_sessions, committee_count,
       committee_activity_bills_discussed, committee_activity_bills_sponsored, committee_activity_interventions,
       committee_topic_counts, committee_score, committee_score_breakdown, updated_at
@@ -324,7 +335,9 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
       %(biografia)s, %(biografia_url)s,
       %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s,
-      %(votes_cast_total)s, %(votes_expected_total)s, %(voting_participation_pct)s, %(voting_score)s, %(voting_score_breakdown)s::jsonb,
+      %(votes_cast_total)s, %(votes_expected_total)s, %(voting_participation_pct)s,
+      %(votes_yes_total)s, %(votes_no_total)s, %(votes_abstention_total)s,
+      %(voting_score)s, %(voting_score_breakdown)s::jsonb,
       %(committee_memberships_json)s::jsonb, %(committee_sessions_attended)s, %(committee_total_sessions)s, %(committee_count)s,
       %(committee_activity_bills_discussed)s, %(committee_activity_bills_sponsored)s, %(committee_activity_interventions)s,
       %(committee_topic_counts)s::jsonb, %(committee_score)s, %(committee_score_breakdown)s::jsonb, NOW()
@@ -344,6 +357,9 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
       votes_cast_total = COALESCE(EXCLUDED.votes_cast_total, parlamentarios.votes_cast_total),
       votes_expected_total = COALESCE(EXCLUDED.votes_expected_total, parlamentarios.votes_expected_total),
       voting_participation_pct = COALESCE(EXCLUDED.voting_participation_pct, parlamentarios.voting_participation_pct),
+      votes_yes_total = COALESCE(EXCLUDED.votes_yes_total, parlamentarios.votes_yes_total),
+      votes_no_total = COALESCE(EXCLUDED.votes_no_total, parlamentarios.votes_no_total),
+      votes_abstention_total = COALESCE(EXCLUDED.votes_abstention_total, parlamentarios.votes_abstention_total),
       voting_score = COALESCE(EXCLUDED.voting_score, parlamentarios.voting_score),
       voting_score_breakdown = COALESCE(EXCLUDED.voting_score_breakdown, parlamentarios.voting_score_breakdown),
       committee_memberships_json = COALESCE(EXCLUDED.committee_memberships_json, parlamentarios.committee_memberships_json),
@@ -438,7 +454,9 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       camara, external_id, nombre, partido, distrito_circunscripcion,
       biografia, biografia_url,
       region, periodo, source, asistencia_pct, sesiones_totales, sesiones_ausentes,
-      votes_cast_total, votes_expected_total, voting_participation_pct, voting_score, voting_score_breakdown,
+      votes_cast_total, votes_expected_total, voting_participation_pct,
+      votes_yes_total, votes_no_total, votes_abstention_total,
+      voting_score, voting_score_breakdown,
       committee_memberships_json, committee_sessions_attended, committee_total_sessions, committee_count,
       committee_activity_bills_discussed, committee_activity_bills_sponsored, committee_activity_interventions,
       committee_topic_counts, committee_score, committee_score_breakdown, updated_at
@@ -446,7 +464,9 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       %(camara)s, %(external_id)s, %(nombre)s, %(partido)s, %(distrito_circunscripcion)s,
       %(biografia)s, %(biografia_url)s,
       %(region)s, %(periodo)s, %(source)s, %(asistencia_pct)s, %(sesiones_totales)s, %(sesiones_ausentes)s,
-      %(votes_cast_total)s, %(votes_expected_total)s, %(voting_participation_pct)s, %(voting_score)s, %(voting_score_breakdown)s::jsonb,
+      %(votes_cast_total)s, %(votes_expected_total)s, %(voting_participation_pct)s,
+      %(votes_yes_total)s, %(votes_no_total)s, %(votes_abstention_total)s,
+      %(voting_score)s, %(voting_score_breakdown)s::jsonb,
       %(committee_memberships_json)s::jsonb, %(committee_sessions_attended)s, %(committee_total_sessions)s, %(committee_count)s,
       %(committee_activity_bills_discussed)s, %(committee_activity_bills_sponsored)s, %(committee_activity_interventions)s,
       %(committee_topic_counts)s::jsonb, %(committee_score)s, %(committee_score_breakdown)s::jsonb, NOW()
@@ -466,6 +486,9 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
       votes_cast_total = COALESCE(EXCLUDED.votes_cast_total, parlamentarios.votes_cast_total),
       votes_expected_total = COALESCE(EXCLUDED.votes_expected_total, parlamentarios.votes_expected_total),
       voting_participation_pct = COALESCE(EXCLUDED.voting_participation_pct, parlamentarios.voting_participation_pct),
+      votes_yes_total = COALESCE(EXCLUDED.votes_yes_total, parlamentarios.votes_yes_total),
+      votes_no_total = COALESCE(EXCLUDED.votes_no_total, parlamentarios.votes_no_total),
+      votes_abstention_total = COALESCE(EXCLUDED.votes_abstention_total, parlamentarios.votes_abstention_total),
       voting_score = COALESCE(EXCLUDED.voting_score, parlamentarios.voting_score),
       voting_score_breakdown = COALESCE(EXCLUDED.voting_score_breakdown, parlamentarios.voting_score_breakdown),
       committee_memberships_json = COALESCE(EXCLUDED.committee_memberships_json, parlamentarios.committee_memberships_json),
@@ -563,6 +586,9 @@ def list_parliamentarians(
       p.votes_cast_total,
       p.votes_expected_total,
       p.voting_participation_pct::float AS voting_participation_pct,
+      p.votes_yes_total,
+      p.votes_no_total,
+      p.votes_abstention_total,
       p.voting_score::float AS voting_score,
       p.voting_score_breakdown,
       p.committee_memberships_json AS committee_memberships,
@@ -715,6 +741,7 @@ def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:
       sesiones_totales, sesiones_ausentes,
       votes_cast_total, votes_expected_total,
       voting_participation_pct::float AS voting_participation_pct,
+      votes_yes_total, votes_no_total, votes_abstention_total,
       voting_score::float AS voting_score, voting_score_breakdown,
       committee_memberships_json AS committee_memberships,
       committee_sessions_attended, committee_total_sessions, committee_count,

@@ -3,233 +3,307 @@ import Link from "next/link";
 import { getParliamentarians } from "../lib/api";
 import { computeTransparencyScore, scoreTier } from "../lib/scoring";
 
-type SortBy =
-  | "score"
-  | "nombre"
-  | "camara"
-  | "partido"
-  | "distrito"
-  | "region"
-  | "asistencia"
-  | "votaciones"
-  | "sesiones";
-type SortOrder = "asc" | "desc";
-
-function isSortBy(value: string): value is SortBy {
-  return ["score", "nombre", "camara", "partido", "distrito", "region", "asistencia", "votaciones", "sesiones"].includes(value);
-}
-
-function isSortOrder(value: string): value is SortOrder {
-  return value === "asc" || value === "desc";
-}
-
-function defaultOrderFor(sortBy: SortBy): SortOrder {
-  return ["nombre", "camara", "partido", "distrito", "region"].includes(sortBy) ? "asc" : "desc";
-}
-
 function normalizeText(value: unknown) {
   const text = String(value ?? "").trim();
   if (!text || text.toLowerCase() === "sin dato") return "";
   return text;
 }
 
-function compareText(a: unknown, b: unknown) {
-  const va = normalizeText(a);
-  const vb = normalizeText(b);
-  if (!va && !vb) return 0;
-  if (!va) return 1;
-  if (!vb) return -1;
-  return va.localeCompare(vb, "es", { sensitivity: "base" });
+function compareText(a: string, b: string) {
+  return a.localeCompare(b, "es", { sensitivity: "base" });
 }
 
-function compareNullableNumber(a: unknown, b: unknown) {
-  const na = a == null ? null : Number(a);
-  const nb = b == null ? null : Number(b);
-  const va = na != null && Number.isFinite(na) ? na : null;
-  const vb = nb != null && Number.isFinite(nb) ? nb : null;
-
-  if (va == null && vb == null) return 0;
-  if (va == null) return 1;
-  if (vb == null) return -1;
-  return va - vb;
+function formatMaybeNumber(value: number | null, digits = 2) {
+  if (value == null || Number.isNaN(value)) return "N/D";
+  return value.toFixed(digits);
 }
 
-function sortRows(rows: any[], sortBy: SortBy, sortOrder: SortOrder) {
-  const out = [...rows];
-  const direction = sortOrder === "asc" ? 1 : -1;
+function clampPercent(value: number | null) {
+  if (value == null || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
 
-  return out.sort((a, b) => {
-    let result = 0;
-    if (sortBy === "score") result = compareNullableNumber(a.score, b.score);
-    if (sortBy === "nombre") result = compareText(a.nombre, b.nombre);
-    if (sortBy === "camara") result = compareText(a.camara, b.camara);
-    if (sortBy === "partido") result = compareText(a.partido, b.partido);
-    if (sortBy === "distrito") result = compareText(a.distrito_circunscripcion, b.distrito_circunscripcion);
-    if (sortBy === "region") result = compareText(a.region, b.region);
-    if (sortBy === "asistencia") result = compareNullableNumber(a.asistencia_pct, b.asistencia_pct);
-    if (sortBy === "votaciones") result = compareNullableNumber(a.voting_participation_pct, b.voting_participation_pct);
-    if (sortBy === "sesiones") result = compareNullableNumber(a.sesiones_totales, b.sesiones_totales);
+function averageOf(values: Array<number | null>) {
+  const clean = values.filter((value): value is number => value != null && Number.isFinite(value));
+  if (!clean.length) return null;
+  return clean.reduce((acc, value) => acc + value, 0) / clean.length;
+}
 
-    if (result === 0) {
-      return compareText(a.nombre, b.nombre);
-    }
-    return result * direction;
+function rankRows(rows: any[], order: "asc" | "desc") {
+  const scored = rows.filter((row) => row.score != null);
+  const sorted = [...scored].sort((a, b) => {
+    const diff = Number(a.score) - Number(b.score);
+    if (diff === 0) return compareText(String(a.nombre ?? ""), String(b.nombre ?? ""));
+    return order === "desc" ? -diff : diff;
   });
+  return sorted.slice(0, 5);
 }
 
-export default async function Home({ searchParams }: { searchParams: Record<string, string | string[] | undefined> }) {
-  const q = typeof searchParams.q === "string" ? searchParams.q : "";
-  const partido = typeof searchParams.partido === "string" ? searchParams.partido : "";
-  const region = typeof searchParams.region === "string" ? searchParams.region : "";
-  const camara = typeof searchParams.camara === "string" ? searchParams.camara : "";
-  const rawSortBy = typeof searchParams.sort_by === "string" ? searchParams.sort_by : "score";
-  const sortBy: SortBy = isSortBy(rawSortBy) ? rawSortBy : "score";
-  const rawSortOrder = typeof searchParams.sort_order === "string" ? searchParams.sort_order : defaultOrderFor(sortBy);
-  const sortOrder: SortOrder = isSortOrder(rawSortOrder) ? rawSortOrder : defaultOrderFor(sortBy);
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>;
+}) {
+  const selectedParty = typeof searchParams.partido === "string" ? searchParams.partido : "";
+  const selectedRegion = typeof searchParams.region === "string" ? searchParams.region : "";
 
-  const params = new URLSearchParams();
-  if (q) params.set("q", q);
-  if (partido) params.set("partido", partido);
-  if (region) params.set("region", region);
-  if (camara) params.set("camara", camara);
-  params.set("sort_by", sortBy);
-  params.set("sort_order", sortOrder);
-
-  const data = await getParliamentarians(params.toString());
-  const diputados = data.counters?.DIPUTADO ?? 0;
-  const senadores = data.counters?.SENADOR ?? 0;
-
-  const rows = (data.items || []).map((row: any) => ({
+  const data = await getParliamentarians("limit=1000&unique_people=true");
+  const baseRows = (data.items || []).map((row: any) => ({
     ...row,
     score: computeTransparencyScore(row),
   }));
 
-  const sortedRows = sortRows(rows, sortBy, sortOrder);
-  const rowsWithScore = rows.filter((row: any) => row.score != null);
-  const avgScore = rowsWithScore.length === 0
-    ? null
-    : rowsWithScore.reduce((acc: number, row: any) => acc + row.score, 0) / rowsWithScore.length;
-  const top10 = sortRows(rowsWithScore, "score", "desc").slice(0, 10);
+  const partyOptions = [...new Set(baseRows.map((row: any) => normalizeText(row.partido)).filter(Boolean))].sort(compareText);
+  const regionOptions = [...new Set(baseRows.map((row: any) => normalizeText(row.region)).filter(Boolean))].sort(compareText);
+
+  const filteredRows = baseRows.filter((row: any) => {
+    if (selectedParty && normalizeText(row.partido) !== selectedParty) return false;
+    if (selectedRegion && normalizeText(row.region) !== selectedRegion) return false;
+    return true;
+  });
+
+  const topFive = rankRows(filteredRows, "desc");
+  const bottomFive = rankRows(filteredRows, "asc");
+  const avgScore = averageOf(filteredRows.map((row: any) => row.score ?? null));
+  const avgAttendance = averageOf(
+    filteredRows.map((row: any) => (row.asistencia_pct == null ? null : Number(row.asistencia_pct)))
+  );
+  const avgVoting = averageOf(
+    filteredRows.map((row: any) =>
+      row.voting_participation_pct == null ? null : Number(row.voting_participation_pct)
+    )
+  );
+  const highPerformers = filteredRows.filter((row: any) => row.score != null && row.score >= 80).length;
+  const lowPerformers = filteredRows.filter((row: any) => row.score != null && row.score < 60).length;
+  const tableRows = [...filteredRows].sort((a, b) => {
+    const aScore = a.score == null ? -1 : Number(a.score);
+    const bScore = b.score == null ? -1 : Number(b.score);
+    if (aScore === bScore) return compareText(String(a.nombre ?? ""), String(b.nombre ?? ""));
+    return bScore - aScore;
+  });
 
   return (
     <main>
-      <section className="hero">
+      <section className="hero dashboard-hero">
         <div className="brand-wrap">
           <div>
-            <h1>Stratmap Politics</h1>
-            <p>Monitor legislativo ciudadano para Chile: parlamentarios, asistencia histórica y score comparativo.</p>
+            <span className="hero-kicker">Monitoreo Legislativo</span>
+            <h1>Ranking público de desempeño parlamentario</h1>
+            <p>
+              Un dashboard de KPIs para detectar rápido quién está arriba, quién está abajo y cómo se
+              comporta cada bancada por territorio.
+            </p>
           </div>
           <Image
             src="/stratmap-politics-logo.svg"
             alt="Stratmap Politics"
-            width={110}
-            height={110}
+            width={118}
+            height={118}
             className="brand-logo"
             priority
           />
         </div>
       </section>
 
-      <div className="grid kpis">
-        <div className="card">
-          <div className="kpi-value">{data.total_global ?? data.count}</div>
-          <div className="kpi-label">Total parlamentarios</div>
-        </div>
-        <div className="card">
-          <div className="kpi-value">{avgScore == null ? "N/D" : avgScore.toFixed(2)}</div>
+      <section className="dashboard-grid dashboard-overview">
+        <article className="card kpi-panel">
+          <div className="kpi-label">Parlamentarios visibles</div>
+          <div className="kpi-value">{filteredRows.length}</div>
+          <div className="kpi-foot">Sobre {data.total_global ?? data.count} registros públicos</div>
+        </article>
+        <article className="card kpi-panel">
           <div className="kpi-label">Score promedio</div>
-        </div>
-        <div className="card">
-          <div className="kpi-value">{diputados}</div>
-          <div className="kpi-label">Diputados</div>
-        </div>
-        <div className="card">
-          <div className="kpi-value">{senadores}</div>
-          <div className="kpi-label">Senadores</div>
-        </div>
-      </div>
-
-      <section className="card filter-wrap">
-        <h3 className="filter-title">Filtros y Orden</h3>
-        <form className="filter-bar" method="GET">
-          <input name="q" placeholder="Buscar nombre" defaultValue={q} />
-          <input name="partido" placeholder="Partido" defaultValue={partido} />
-          <input name="region" placeholder="Región" defaultValue={region} />
-          <input name="camara" placeholder="Cámara (DIPUTADO o SENADOR)" defaultValue={camara} />
-          <select name="sort_by" defaultValue={sortBy}>
-            <option value="score">Score</option>
-            <option value="nombre">Nombre</option>
-            <option value="camara">Cámara</option>
-            <option value="partido">Partido</option>
-            <option value="distrito">Distrito/Circunscripción</option>
-            <option value="region">Región</option>
-            <option value="asistencia">Asistencia</option>
-            <option value="votaciones">Votaciones</option>
-            <option value="sesiones">Sesiones</option>
-          </select>
-          <select name="sort_order" defaultValue={sortOrder}>
-            <option value="asc">Ascendente</option>
-            <option value="desc">Descendente</option>
-          </select>
-          <button className="filter-submit" type="submit">Aplicar</button>
-        </form>
+          <div className="kpi-value">{formatMaybeNumber(avgScore)}</div>
+          <div className="kpi-foot kpi-good">Verde = mejor lectura global</div>
+        </article>
+        <article className="card kpi-panel">
+          <div className="kpi-label">Asistencia promedio</div>
+          <div className="kpi-value">{avgAttendance == null ? "N/D" : `${avgAttendance.toFixed(2)}%`}</div>
+          <div className="kpi-foot">Promedio sobre quienes tienen dato</div>
+        </article>
+        <article className="card kpi-panel">
+          <div className="kpi-label">Participación en votaciones</div>
+          <div className="kpi-value">{avgVoting == null ? "N/D" : `${avgVoting.toFixed(2)}%`}</div>
+          <div className="kpi-foot">No reemplaza asistencia, la complementa</div>
+        </article>
       </section>
 
-      <section className="card chart-card">
-        <h3 className="filter-title">Top 10 por Score</h3>
-        <div className="score-chart">
-          {top10.map((row: any) => (
-            <div key={row.id} className="score-bar-row">
-              <div className="score-bar-label">{row.nombre}</div>
-              <div className="score-bar-track">
-                <span style={{ width: `${Math.max(1, Math.min(100, Number(row.score ?? 0))) }%` }} />
-              </div>
-              <div className="score-bar-value">{row.score == null ? "N/D" : row.score.toFixed(2)}</div>
+      <section className="dashboard-grid dashboard-main">
+        <article className="card filter-panel">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Filtros</h3>
+              <p className="panel-subtitle">Cruza partido y región para rehacer el ranking en tiempo real.</p>
             </div>
-          ))}
-        </div>
+          </div>
+          <form className="dashboard-filters" method="GET">
+            <label className="filter-field">
+              <span>Partido</span>
+              <select name="partido" defaultValue={selectedParty}>
+                <option value="">Todos</option>
+                {partyOptions.map((party) => (
+                  <option key={party} value={party}>
+                    {party}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="filter-field">
+              <span>Región</span>
+              <select name="region" defaultValue={selectedRegion}>
+                <option value="">Todas</option>
+                {regionOptions.map((region) => (
+                  <option key={region} value={region}>
+                    {region}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="filter-actions">
+              <button className="filter-submit" type="submit">
+                Actualizar ranking
+              </button>
+              <Link className="filter-reset" href="/">
+                Limpiar filtros
+              </Link>
+            </div>
+          </form>
+          <div className="status-grid">
+            <div className="status-pill positive">
+              <strong>{highPerformers}</strong>
+              <span>sobre 80 puntos</span>
+            </div>
+            <div className="status-pill negative">
+              <strong>{lowPerformers}</strong>
+              <span>bajo 60 puntos</span>
+            </div>
+          </div>
+        </article>
+
+        <article className="card rank-card rank-card-positive">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Top 5</h3>
+              <p className="panel-subtitle">Los mejores calificados dentro del filtro activo.</p>
+            </div>
+          </div>
+          <div className="rank-list">
+            {topFive.map((row: any, index: number) => (
+              <Link key={row.id} href={`/parliamentarians/${row.id}`} className="rank-item">
+                <div className="rank-order">{index + 1}</div>
+                <div className="rank-copy">
+                  <div className="rank-name">{row.nombre}</div>
+                  <div className="rank-meta">
+                    {row.partido} | {row.region}
+                  </div>
+                  <div className="rank-bar">
+                    <span style={{ width: `${clampPercent(Number(row.score))}%` }} />
+                  </div>
+                </div>
+                <div className={`rank-score ${scoreTier(Number(row.score))}`}>{Number(row.score).toFixed(1)}</div>
+              </Link>
+            ))}
+          </div>
+        </article>
+
+        <article className="card rank-card rank-card-negative">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Bottom 5</h3>
+              <p className="panel-subtitle">Los puntajes más bajos para detectar zonas de alerta.</p>
+            </div>
+          </div>
+          <div className="rank-list">
+            {bottomFive.map((row: any, index: number) => (
+              <Link key={row.id} href={`/parliamentarians/${row.id}`} className="rank-item">
+                <div className="rank-order">{index + 1}</div>
+                <div className="rank-copy">
+                  <div className="rank-name">{row.nombre}</div>
+                  <div className="rank-meta">
+                    {row.partido} | {row.region}
+                  </div>
+                  <div className="rank-bar rank-bar-negative">
+                    <span style={{ width: `${clampPercent(Number(row.score))}%` }} />
+                  </div>
+                </div>
+                <div className={`rank-score ${scoreTier(Number(row.score))}`}>{Number(row.score).toFixed(1)}</div>
+              </Link>
+            ))}
+          </div>
+        </article>
       </section>
 
-      <section className="card table-card">
-        <p className="profile-meta">Haz clic en el nombre para abrir la ficha completa del parlamentario.</p>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Score</th>
-                <th>Nombre</th>
-                <th>Cámara</th>
-                <th>Partido</th>
-                <th>Distrito/Circunscripción</th>
-                <th>Región</th>
-                <th>Asistencia %</th>
-                <th>Votaciones %</th>
-                <th>Sesiones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRows.map((row: any) => (
-                <tr key={row.id}>
-                  <td className={row.score == null ? "" : `score ${scoreTier(row.score)}`}>
-                    {row.score == null ? "N/D" : row.score.toFixed(2)}
-                  </td>
-                  <td className="row-name"><Link href={`/parliamentarians/${row.id}`} title="Ver ficha completa">{row.nombre}</Link></td>
-                  <td><span className="chamber-pill">{row.camara}</span></td>
-                  <td>{row.partido}</td>
-                  <td>{row.distrito_circunscripcion}</td>
-                  <td>{row.region}</td>
-                  <td>{row.asistencia_pct == null ? "N/D" : Number(row.asistencia_pct).toFixed(2)}</td>
-                  <td>{row.voting_participation_pct == null ? "N/D" : Number(row.voting_participation_pct).toFixed(2)}</td>
-                  <td>
-                    {row.sesiones_totales == null || row.sesiones_ausentes == null
-                      ? "N/D"
-                      : `${row.sesiones_totales - row.sesiones_ausentes}/${row.sesiones_totales}`}
-                  </td>
+      <section className="dashboard-grid dashboard-secondary">
+        <article className="card ranking-chart-card">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Lectura rápida del ranking</h3>
+              <p className="panel-subtitle">Las barras dejan claro el desempeño sin depender del texto.</p>
+            </div>
+          </div>
+          <div className="score-chart dashboard-score-chart">
+            {tableRows.slice(0, 10).map((row: any) => (
+              <div key={row.id} className="score-bar-row">
+                <div className="score-bar-label">
+                  <strong>{row.nombre}</strong>
+                  <span>{row.partido}</span>
+                </div>
+                <div className="score-bar-track tone-track">
+                  <span
+                    className={row.score != null && row.score >= 80 ? "tone-positive" : row.score != null && row.score < 60 ? "tone-negative" : "tone-neutral"}
+                    style={{ width: `${clampPercent(row.score)}%` }}
+                  />
+                </div>
+                <div className={`score-bar-value ${row.score == null ? "" : `score ${scoreTier(Number(row.score))}`}`}>
+                  {formatMaybeNumber(row.score)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="card table-card">
+          <div className="panel-header">
+            <div>
+              <h3 className="filter-title">Listado filtrado</h3>
+              <p className="panel-subtitle">Haz clic en cualquier nombre para abrir la ficha individual.</p>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Score</th>
+                  <th>Nombre</th>
+                  <th>Partido</th>
+                  <th>Región</th>
+                  <th>Asistencia</th>
+                  <th>Votaciones</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {tableRows.map((row: any) => (
+                  <tr key={row.id}>
+                    <td className={row.score == null ? "" : `score ${scoreTier(Number(row.score))}`}>
+                      {formatMaybeNumber(row.score)}
+                    </td>
+                    <td className="row-name">
+                      <Link href={`/parliamentarians/${row.id}`}>{row.nombre}</Link>
+                    </td>
+                    <td>{row.partido}</td>
+                    <td>{row.region}</td>
+                    <td>{row.asistencia_pct == null ? "N/D" : `${Number(row.asistencia_pct).toFixed(2)}%`}</td>
+                    <td>
+                      {row.voting_participation_pct == null
+                        ? "N/D"
+                        : `${Number(row.voting_participation_pct).toFixed(2)}%`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
       </section>
     </main>
   );
