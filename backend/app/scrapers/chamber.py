@@ -348,6 +348,44 @@ def _attendance_rows_from_session_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
     return rows
 
 
+def _session_vote_ids_from_xml(xml_bytes: bytes) -> List[int]:
+    root = ET.fromstring(xml_bytes)
+    out: List[int] = []
+    for vote_node in _find_all(root, "Votacion"):
+        vote_id = _to_int(_text(_find_child(vote_node, "Id")), 0)
+        if vote_id > 0:
+            out.append(vote_id)
+    return sorted(set(out))
+
+
+def _vote_rows_from_vote_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
+    root = ET.fromstring(xml_bytes)
+    rows: List[Dict[str, str]] = []
+
+    for vote_node in _find_all(root, "Voto"):
+        deputy_node = _find_child(vote_node, "Diputado")
+        if deputy_node is None:
+            continue
+        external_id = _normalize_external_id(_text(_find_child(deputy_node, "Id")))
+        nombre_1 = _text(_find_child(deputy_node, "Nombre"))
+        nombre_2 = _text(_find_child(deputy_node, "Nombre2"))
+        ape_pat = _text(_find_child(deputy_node, "ApellidoPaterno"))
+        ape_mat = _text(_find_child(deputy_node, "ApellidoMaterno"))
+        nombre = _clean_person_name(" ".join([p for p in [nombre_1, nombre_2, ape_pat, ape_mat] if p]))
+        opcion = _text(_find_child(vote_node, "OpcionVoto"))
+        if not nombre:
+            continue
+        rows.append(
+            {
+                "external_id": external_id or "",
+                "nombre": nombre,
+                "opcion": opcion,
+            }
+        )
+
+    return rows
+
+
 def _clean_person_name(name: str) -> str:
     raw = re.sub(r"\s+", " ", (name or "").strip())
     return raw.strip(" -")
@@ -698,6 +736,79 @@ def fetch_attendance_by_deputy(
     return dict(stats_by_id), dict(stats_by_name)
 
 
+def fetch_voting_stats_by_deputy(
+    from_year: int,
+    to_year: int,
+    session_limit_per_year: int = 300,
+) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
+    all_sessions: List[int] = []
+    for year in range(from_year, to_year + 1):
+        sessions = fetch_sessions(year=year, limit=session_limit_per_year)
+        all_sessions.extend([s["session_id"] for s in sessions])
+    session_ids = sorted(set(all_sessions), reverse=True)
+
+    valid_names = _build_valid_deputy_name_set()
+    stats_by_id: Dict[str, Dict[str, int]] = defaultdict(lambda: {"votes_cast": 0, "votes_expected": 0})
+    stats_by_name: Dict[str, Dict[str, int]] = defaultdict(lambda: {"votes_cast": 0, "votes_expected": 0})
+
+    for sid in session_ids:
+        try:
+            session_xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
+        except Exception:
+            continue
+
+        vote_ids = _session_vote_ids_from_xml(session_xml)
+        if not vote_ids:
+            continue
+
+        attendance_records = _attendance_rows_from_session_xml(session_xml)
+        present_ids: set[str] = set()
+        present_names: set[str] = set()
+        for row in attendance_records:
+            external_id = _normalize_external_id(row.get("external_id"))
+            nombre = _clean_person_name(row.get("nombre", ""))
+            nombre_norm = _normalize_text(nombre)
+            if not nombre_norm or nombre_norm not in valid_names:
+                continue
+            if _looks_like_admin_attendance_label(nombre):
+                continue
+            if _normalize_attendance_state(row.get("status", "")) != "presente":
+                continue
+            present_names.add(nombre_norm)
+            if external_id:
+                present_ids.add(external_id)
+
+        if not present_ids and not present_names:
+            continue
+
+        votes_expected = len(vote_ids)
+        for external_id in present_ids:
+            stats_by_id[external_id]["votes_expected"] += votes_expected
+        for nombre_norm in present_names:
+            stats_by_name[nombre_norm]["votes_expected"] += votes_expected
+
+        for vote_id in vote_ids:
+            try:
+                vote_xml = _request_xml("WSLegislativo.asmx/retornarVotacionDetalle", params={"prmVotacionId": vote_id})
+            except Exception:
+                continue
+            for vote_row in _vote_rows_from_vote_xml(vote_xml):
+                external_id = _normalize_external_id(vote_row.get("external_id"))
+                nombre = _clean_person_name(vote_row.get("nombre", ""))
+                nombre_norm = _normalize_text(nombre)
+                counted = False
+                if external_id and external_id in present_ids:
+                    stats_by_id[external_id]["votes_cast"] += 1
+                    counted = True
+                if nombre_norm and nombre_norm in present_names:
+                    stats_by_name[nombre_norm]["votes_cast"] += 1
+                    counted = True
+                if counted:
+                    continue
+
+    return dict(stats_by_id), dict(stats_by_name)
+
+
 def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
     sessions_xml = _request_xml("WSSala.asmx/retornarSesionesXAnno", params={"prmAnno": year})
     session_records = _records_from_xml(sessions_xml)
@@ -827,7 +938,7 @@ def build_deputy_profiles(
     include_attendance: bool = True,
 ) -> List[Dict[str, Any]]:
     current_year = datetime.now().year
-    from_year = int(os.getenv("CHAMBER_ATTENDANCE_FROM_YEAR", "2022"))
+    from_year = int(os.getenv("CHAMBER_ATTENDANCE_FROM_YEAR", str(current_year)))
     deputies = fetch_deputies_periodo_actual(
         enrich_profile_page=enrich_profile_page,
         enrich_offset=enrich_offset,
@@ -835,8 +946,15 @@ def build_deputy_profiles(
     )
     attendance_by_id: Dict[str, Dict[str, int]] = {}
     attendance_by_name: Dict[str, Dict[str, int]] = {}
+    voting_by_id: Dict[str, Dict[str, int]] = {}
+    voting_by_name: Dict[str, Dict[str, int]] = {}
     if include_attendance:
         attendance_by_id, attendance_by_name = fetch_attendance_by_deputy(
+            from_year=from_year,
+            to_year=current_year,
+            session_limit_per_year=300,
+        )
+        voting_by_id, voting_by_name = fetch_voting_stats_by_deputy(
             from_year=from_year,
             to_year=current_year,
             session_limit_per_year=300,
@@ -849,9 +967,16 @@ def build_deputy_profiles(
             deputy["external_id"],
             attendance_by_name.get(deputy_name_norm, {"present": 0, "absent": 0, "total": 0}),
         ) if include_attendance else {"present": 0, "absent": 0, "total": 0}
+        vote_stats = voting_by_id.get(
+            deputy["external_id"],
+            voting_by_name.get(deputy_name_norm, {"votes_cast": 0, "votes_expected": 0}),
+        ) if include_attendance else {"votes_cast": 0, "votes_expected": 0}
         total = stats["total"]
         absent = stats["absent"]
+        votes_cast = vote_stats["votes_cast"]
+        votes_expected = vote_stats["votes_expected"]
         pct_from_sessions = None if total == 0 else round((stats["present"] / total) * 100, 2)
+        voting_pct = None if votes_expected == 0 else round((votes_cast / votes_expected) * 100, 2)
         pct_from_profile = deputy.get("asistencia_pct")
         pct = pct_from_profile if pct_from_profile is not None else pct_from_sessions
         biography = deputy.get("biografia") or _default_bio(
@@ -872,6 +997,9 @@ def build_deputy_profiles(
                 "asistencia_pct": pct if include_attendance else None,
                 "sesiones_totales": total if (include_attendance and total > 0) else None,
                 "sesiones_ausentes": absent if (include_attendance and total > 0) else None,
+                "votes_cast_total": votes_cast if (include_attendance and votes_expected > 0) else None,
+                "votes_expected_total": votes_expected if (include_attendance and votes_expected > 0) else None,
+                "voting_participation_pct": voting_pct if include_attendance else None,
                 "nombre_normalizado": _normalize_text(deputy["nombre"]),
                 **_empty_committee_fields(),
             }

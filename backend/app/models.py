@@ -17,6 +17,9 @@ class ParliamentarianIn(BaseModel):
     asistencia_pct: Optional[float] = None
     sesiones_totales: Optional[int] = None
     sesiones_ausentes: Optional[int] = None
+    votes_cast_total: Optional[int] = None
+    votes_expected_total: Optional[int] = None
+    voting_participation_pct: Optional[float] = None
     committee_memberships: Optional[List[Dict[str, Any]]] = None
     committee_sessions_attended: Optional[int] = None
     committee_total_sessions: Optional[int] = None

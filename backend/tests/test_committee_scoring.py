@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from backend.app.scoring import calc_committee_score, calc_public_score, calc_scores
+from backend.app.scoring import calc_committee_score, calc_public_score, calc_scores, calc_voting_score
 
 
 class CommitteeScoringTests(unittest.TestCase):
@@ -131,6 +131,34 @@ class CommitteeScoringTests(unittest.TestCase):
         payload = calc_public_score({"attendance_pct": 90, "committee_score": None})
         self.assertEqual(payload["final_score"], 90.0)
         self.assertTrue(payload["components"]["attendance"]["applicable"])
+        self.assertFalse(payload["components"]["voting"]["applicable"])
+        self.assertFalse(payload["components"]["committees"]["applicable"])
+
+    def test_voting_score_uses_participation_when_alignment_missing(self) -> None:
+        payload = calc_voting_score(
+            {
+                "votes_cast_total": 8,
+                "votes_expected_total": 10,
+                "party_alignment_pct": None,
+            }
+        )
+        self.assertEqual(payload["voting_score"], 80.0)
+        self.assertTrue(payload["voting_score_breakdown"]["components"]["voting_participation"]["applicable"])
+        self.assertFalse(payload["voting_score_breakdown"]["components"]["party_alignment"]["applicable"])
+
+    def test_public_score_reweights_with_voting(self) -> None:
+        payload = calc_public_score(
+            {
+                "attendance_pct": 90,
+                "votes_cast_total": 8,
+                "votes_expected_total": 10,
+                "committee_score": None,
+            }
+        )
+        self.assertEqual(payload["voting_score"], 80.0)
+        self.assertAlmostEqual(payload["final_score"], 86.25, places=2)
+        self.assertTrue(payload["components"]["attendance"]["applicable"])
+        self.assertTrue(payload["components"]["voting"]["applicable"])
         self.assertFalse(payload["components"]["committees"]["applicable"])
 
 

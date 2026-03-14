@@ -364,17 +364,81 @@ def calc_committee_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def calc_voting_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
+    votes_cast = _safe_int(
+        metrics.get("votes_cast_total", metrics.get("voting_votes_cast")),
+        None,
+    )
+    votes_expected = _safe_int(
+        metrics.get("votes_expected_total", metrics.get("voting_votes_expected")),
+        None,
+    )
+
+    voting_participation_raw = metrics.get("voting_participation_pct")
+    if voting_participation_raw is None and votes_cast is not None and votes_expected is not None and votes_expected > 0:
+        voting_participation_raw = (votes_cast / votes_expected) * 100.0
+
+    voting_participation_score = (
+        _clamp(_safe_float(voting_participation_raw, 0.0)) if voting_participation_raw is not None else None
+    )
+
+    party_alignment_raw = metrics.get("party_alignment_pct")
+    party_alignment_score = _clamp(_safe_float(party_alignment_raw, 0.0)) if party_alignment_raw is not None else None
+
+    component_payload = _normalize_weighted_components(
+        {
+            "voting_participation": {
+                "value": voting_participation_score,
+                "weight": 0.70,
+                "applicable": voting_participation_score is not None,
+            },
+            "party_alignment": {
+                "value": party_alignment_score,
+                "weight": 0.30,
+                "applicable": party_alignment_score is not None,
+            },
+        }
+    )
+
+    breakdown = {
+        "formula": "sum(component_score * component_weight) / sum(component_weight), only applicable components",
+        "weights": {
+            "voting_participation": 0.70,
+            "party_alignment": 0.30,
+        },
+        "applicability_mode": "exclude_not_applicable",
+        "raw": {
+            "votes_cast_total": votes_cast,
+            "votes_expected_total": votes_expected,
+            "voting_participation_pct": (
+                round(float(voting_participation_raw), 4) if voting_participation_raw is not None else None
+            ),
+            "party_alignment_pct": _round_or_none(party_alignment_score, 4),
+        },
+        "normalized": {
+            "voting_participation_score": _round_or_none(voting_participation_score, 4),
+            "party_alignment_score": _round_or_none(party_alignment_score, 4),
+        },
+        "components": component_payload["components"],
+        "weighted_components": {
+            key: component_payload["components"][key]["weighted_value"]
+            for key in component_payload["components"]
+        },
+        "applicable_weight_sum": component_payload["applicable_weight_sum"],
+    }
+
+    return {
+        "voting_score": component_payload["final_score"],
+        "voting_score_breakdown": breakdown,
+    }
+
+
 def calc_scores(metrics: dict) -> dict:
     attendance_raw = metrics.get("attendance_pct")
     attendance_score = _clamp(_safe_float(attendance_raw, 0.0)) if attendance_raw is not None else None
 
-    voting_participation_raw = metrics.get("voting_participation_pct")
-    party_alignment_raw = metrics.get("party_alignment_pct")
-    voting_score = None
-    if voting_participation_raw is not None and party_alignment_raw is not None:
-        voting_participation = _clamp(_safe_float(voting_participation_raw, 0.0))
-        party_alignment = _clamp(_safe_float(party_alignment_raw, 0.0))
-        voting_score = _clamp((voting_participation * 0.7) + (party_alignment * 0.3))
+    voting = calc_voting_score(metrics)
+    voting_score = voting["voting_score"]
 
     bills_presented_raw = metrics.get("bills_presented")
     bills_approved_raw = metrics.get("bills_approved")
@@ -423,6 +487,7 @@ def calc_scores(metrics: dict) -> dict:
     return {
         "attendance_score": _round_or_none(attendance_score, 2),
         "voting_score": _round_or_none(voting_score, 2),
+        "voting_score_breakdown": voting["voting_score_breakdown"],
         "legislative_score": _round_or_none(legislative_score, 2),
         "transparency_score": _round_or_none(transparency_score, 2),
         "commissions_score": _round_or_none(commissions_score, 2),
@@ -440,17 +505,22 @@ def calc_public_score(metrics: Dict[str, Any]) -> Dict[str, Any]:
         attendance_raw = metrics.get("asistencia_pct")
 
     attendance_score = _clamp(_safe_float(attendance_raw, 0.0)) if attendance_raw is not None else None
+    voting = calc_voting_score(metrics)
+    voting_score = voting["voting_score"]
     committee_raw = metrics.get("committee_score")
     committee_score = _clamp(_safe_float(committee_raw, 0.0)) if committee_raw is not None else None
 
     payload = _normalize_weighted_components(
         {
-            "attendance": {"value": attendance_score, "weight": 0.60, "applicable": attendance_score is not None},
-            "committees": {"value": committee_score, "weight": 0.40, "applicable": committee_score is not None},
+            "attendance": {"value": attendance_score, "weight": 0.50, "applicable": attendance_score is not None},
+            "voting": {"value": voting_score, "weight": 0.30, "applicable": voting_score is not None},
+            "committees": {"value": committee_score, "weight": 0.20, "applicable": committee_score is not None},
         }
     )
     return {
         "final_score": payload["final_score"],
+        "voting_score": _round_or_none(voting_score, 2),
+        "voting_score_breakdown": voting["voting_score_breakdown"],
         "components": payload["components"],
         "applicable_weight_sum": payload["applicable_weight_sum"],
         "formula": "sum(component_score * component_weight) / sum(component_weight), only applicable components",

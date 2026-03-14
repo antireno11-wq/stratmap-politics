@@ -1,24 +1,42 @@
-export function computeTransparencyScore(item: {
+type ScoreComponent = {
+  value?: number | null;
+  weight?: number;
+  applicable?: boolean;
+  effective_weight?: number;
+  weighted_value?: number | null;
+};
+
+type PublicScoreItem = {
   final_score?: number | null;
   asistencia_pct?: number | null;
+  voting_participation_pct?: number | null;
   committee_score?: number | null;
   score_components?: {
-    attendance?: {
-      value?: number | null;
-      weight?: number;
-      applicable?: boolean;
-      effective_weight?: number;
-      weighted_value?: number | null;
-    };
-    committees?: {
-      value?: number | null;
-      weight?: number;
-      applicable?: boolean;
-      effective_weight?: number;
-      weighted_value?: number | null;
-    };
+    attendance?: ScoreComponent;
+    voting?: ScoreComponent;
+    committees?: ScoreComponent;
   } | null;
-}): number | null {
+};
+
+function roundMaybe(value: number | null) {
+  return value == null || Number.isNaN(value) ? null : Math.round(value * 100) / 100;
+}
+
+function clampScore(value: number | null) {
+  return value == null || Number.isNaN(value) ? null : Math.max(0, Math.min(100, value));
+}
+
+function buildEmptyComponent(value: number | null, weight: number): Required<ScoreComponent> {
+  return {
+    value,
+    weight,
+    applicable: value != null,
+    effective_weight: 0,
+    weighted_value: null,
+  };
+}
+
+export function computeTransparencyScore(item: PublicScoreItem): number | null {
   const backendScore = item.final_score == null ? null : Number(item.final_score);
   if (backendScore != null && Number.isFinite(backendScore)) {
     return Math.max(0, Math.min(100, backendScore));
@@ -26,127 +44,87 @@ export function computeTransparencyScore(item: {
   return computePublicScoreBreakdown(item).total_score;
 }
 
-export function computePublicScoreBreakdown(item: {
-  final_score?: number | null;
-  asistencia_pct?: number | null;
-  committee_score?: number | null;
-  score_components?: {
-    attendance?: {
-      value?: number | null;
-      weight?: number;
-      applicable?: boolean;
-      effective_weight?: number;
-      weighted_value?: number | null;
-    };
-    committees?: {
-      value?: number | null;
-      weight?: number;
-      applicable?: boolean;
-      effective_weight?: number;
-      weighted_value?: number | null;
-    };
-  } | null;
-}) {
-  function roundMaybe(value: number | null) {
-    return value == null || Number.isNaN(value) ? null : Math.round(value * 100) / 100;
-  }
-
-  function clampScore(value: number | null) {
-    return value == null || Number.isNaN(value) ? null : Math.max(0, Math.min(100, value));
-  }
-
+export function computePublicScoreBreakdown(item: PublicScoreItem) {
   const backendFinalScore = item.final_score == null ? null : Number(item.final_score);
   const backendComponents = item.score_components ?? null;
+
   if (backendComponents && typeof backendComponents === "object") {
     const attendance = backendComponents.attendance ?? null;
+    const voting = backendComponents.voting ?? null;
     const committees = backendComponents.committees ?? null;
+
     const attendanceScore = clampScore(attendance?.value == null ? null : Number(attendance.value));
+    const votingScore = clampScore(voting?.value == null ? null : Number(voting.value));
     const committeeScore = clampScore(committees?.value == null ? null : Number(committees.value));
-    const attendanceEffectiveWeight = Number(attendance?.effective_weight ?? 0);
-    const committeeEffectiveWeight = Number(committees?.effective_weight ?? 0);
+
     const attendanceWeightedValue =
       attendance?.weighted_value == null ? null : Number(attendance.weighted_value);
+    const votingWeightedValue = voting?.weighted_value == null ? null : Number(voting.weighted_value);
     const committeeWeightedValue =
       committees?.weighted_value == null ? null : Number(committees.weighted_value);
-    let reconstructedTotal: number | null = null;
 
+    let reconstructedTotal: number | null = null;
     if (backendFinalScore != null && Number.isFinite(backendFinalScore)) {
       reconstructedTotal = clampScore(backendFinalScore);
     } else {
-      const weightedParts = [attendanceWeightedValue, committeeWeightedValue].filter(
+      const weightedParts = [attendanceWeightedValue, votingWeightedValue, committeeWeightedValue].filter(
         (value): value is number => value != null && Number.isFinite(value)
       );
       if (weightedParts.length > 0) {
         reconstructedTotal = clampScore(weightedParts.reduce((acc, value) => acc + value, 0));
-      } else {
-        const fallbackApplicableWeight =
-          (attendance?.applicable && attendanceScore != null ? Number(attendance?.weight ?? 0) : 0) +
-          (committees?.applicable && committeeScore != null ? Number(committees?.weight ?? 0) : 0);
-        if (fallbackApplicableWeight > 0) {
-          reconstructedTotal = clampScore(
-            (((attendance?.applicable && attendanceScore != null ? attendanceScore * Number(attendance?.weight ?? 0) : 0) +
-              (committees?.applicable && committeeScore != null ? committeeScore * Number(committees?.weight ?? 0) : 0)) /
-              fallbackApplicableWeight)
-          );
-        }
       }
     }
 
     return {
       attendance_score: roundMaybe(attendanceScore),
+      voting_score: roundMaybe(votingScore),
       committee_score: roundMaybe(committeeScore),
       components: {
         attendance: {
           value: attendanceScore,
-          weight: Number(attendance?.weight ?? 0.6),
+          weight: Number(attendance?.weight ?? 0.5),
           applicable: Boolean(attendance?.applicable),
-          effective_weight: attendanceEffectiveWeight,
+          effective_weight: Number(attendance?.effective_weight ?? 0),
           weighted_value: attendanceWeightedValue,
+        },
+        voting: {
+          value: votingScore,
+          weight: Number(voting?.weight ?? 0.3),
+          applicable: Boolean(voting?.applicable),
+          effective_weight: Number(voting?.effective_weight ?? 0),
+          weighted_value: votingWeightedValue,
         },
         committees: {
           value: committeeScore,
-          weight: Number(committees?.weight ?? 0.4),
+          weight: Number(committees?.weight ?? 0.2),
           applicable: Boolean(committees?.applicable),
-          effective_weight: committeeEffectiveWeight,
+          effective_weight: Number(committees?.effective_weight ?? 0),
           weighted_value: committeeWeightedValue,
         },
       },
-      attendance_weight: attendanceEffectiveWeight,
-      committee_weight: committeeEffectiveWeight,
+      attendance_weight: Number(attendance?.effective_weight ?? 0),
+      voting_weight: Number(voting?.effective_weight ?? 0),
+      committee_weight: Number(committees?.effective_weight ?? 0),
       weighted_attendance: Number(attendanceWeightedValue ?? 0),
+      weighted_voting: Number(votingWeightedValue ?? 0),
       weighted_committee: Number(committeeWeightedValue ?? 0),
       applicable_weight_sum:
         Number(attendance?.applicable ? attendance?.weight ?? 0 : 0) +
+        Number(voting?.applicable ? voting?.weight ?? 0 : 0) +
         Number(committees?.applicable ? committees?.weight ?? 0 : 0),
       total_score: roundMaybe(reconstructedTotal),
     };
   }
 
   const attendanceRaw = item.asistencia_pct == null ? null : Number(item.asistencia_pct);
-  const attendanceScore =
-    attendanceRaw == null || Number.isNaN(attendanceRaw)
-      ? null
-      : Math.max(0, Math.min(100, attendanceRaw));
+  const votingRaw =
+    item.voting_participation_pct == null ? null : Number(item.voting_participation_pct);
   const committeeRaw = item.committee_score == null ? null : Number(item.committee_score);
-  const committeeScore = committeeRaw == null || Number.isNaN(committeeRaw)
-    ? null
-    : Math.max(0, Math.min(100, committeeRaw));
 
   const components = {
-    attendance: {
-      value: attendanceScore,
-      weight: 0.6,
-      applicable: attendanceScore != null,
-      effective_weight: 0,
-      weighted_value: null as number | null,
-    },
-    committees: {
-      value: committeeScore,
-      weight: 0.4,
-      applicable: committeeScore != null,
-      effective_weight: 0,
-      weighted_value: null as number | null,
-    },
+    attendance: buildEmptyComponent(clampScore(attendanceRaw), 0.5),
+    voting: buildEmptyComponent(clampScore(votingRaw), 0.3),
+    committees: buildEmptyComponent(clampScore(committeeRaw), 0.2),
   };
 
   const applicableWeight = Object.values(components)
@@ -164,21 +142,19 @@ export function computePublicScoreBreakdown(item: {
     }
   }
 
-  const attendanceWeight = components.attendance.effective_weight;
-  const committeeWeight = components.committees.effective_weight;
-  const weightedAttendance = components.attendance.weighted_value ?? 0;
-  const weightedCommittee = components.committees.weighted_value ?? 0;
-
   return {
-    attendance_score: attendanceScore == null ? null : Math.round(attendanceScore * 100) / 100,
-    committee_score: committeeScore == null ? null : Math.round(committeeScore * 100) / 100,
+    attendance_score: roundMaybe(components.attendance.value),
+    voting_score: roundMaybe(components.voting.value),
+    committee_score: roundMaybe(components.committees.value),
     components,
-    attendance_weight: attendanceWeight,
-    committee_weight: committeeWeight,
-    weighted_attendance: Math.round(weightedAttendance * 100) / 100,
-    weighted_committee: Math.round(weightedCommittee * 100) / 100,
+    attendance_weight: components.attendance.effective_weight,
+    voting_weight: components.voting.effective_weight,
+    committee_weight: components.committees.effective_weight,
+    weighted_attendance: roundMaybe(components.attendance.weighted_value ?? 0) ?? 0,
+    weighted_voting: roundMaybe(components.voting.weighted_value ?? 0) ?? 0,
+    weighted_committee: roundMaybe(components.committees.weighted_value ?? 0) ?? 0,
     applicable_weight_sum: Math.round(applicableWeight * 10000) / 10000,
-    total_score: total == null ? null : Math.round(total * 100) / 100,
+    total_score: roundMaybe(total),
   };
 }
 

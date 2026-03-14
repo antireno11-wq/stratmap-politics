@@ -37,8 +37,10 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
   const scoreBreakdown = computePublicScoreBreakdown(p);
   const score = scoreBreakdown.total_score ?? 0;
   const attendance = scoreBreakdown.attendance_score;
+  const votingScore = scoreBreakdown.voting_score;
   const committeeScore = scoreBreakdown.committee_score;
   const attendanceValue = attendance ?? 0;
+  const votingValue = votingScore ?? 0;
   const committeeValue = committeeScore ?? 0;
   const biography = safeBiography(p.biografia);
   const rawBiographyUrl = String(p.biografia_url ?? "").trim();
@@ -53,8 +55,10 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
 
   const territoryReady = hasRegion && hasDistrict;
   const weightedAttendance = scoreBreakdown.weighted_attendance;
+  const weightedVoting = scoreBreakdown.weighted_voting;
   const weightedCommittee = scoreBreakdown.weighted_committee;
   const attendanceWeightLabel = Math.round(scoreBreakdown.attendance_weight * 100);
+  const votingWeightLabel = Math.round(scoreBreakdown.voting_weight * 100);
   const committeeWeightLabel = Math.round(scoreBreakdown.committee_weight * 100);
 
   return (
@@ -109,6 +113,14 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
         </article>
 
         <article className="metric-box">
+          <div className="metric-label">Votaciones</div>
+          <div className="metric-value">{votingScore == null ? "N/D" : `${votingScore.toFixed(2)}%`}</div>
+          <div className="progress">
+            <span style={{ width: `${Math.max(0, Math.min(100, votingValue))}%` }} />
+          </div>
+        </article>
+
+        <article className="metric-box">
           <div className="metric-label">Sesiones asistidas</div>
           <div className="metric-value">
             {attended == null || p.sesiones_totales == null ? "N/D" : `${attended}/${p.sesiones_totales}`}
@@ -129,9 +141,9 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
       <section className="card score-breakdown-card">
         <h3 className="filter-title">Cómo Se Calcula El Score</h3>
         <p className="score-explainer">
-          {committeeScore == null
-            ? "Score final = Asistencia x 1.00. Aun no hay score de comisiones disponible para este caso."
-            : `Score final = Asistencia x ${scoreBreakdown.attendance_weight.toFixed(2)} + Comisiones x ${scoreBreakdown.committee_weight.toFixed(2)}.`}
+          {scoreBreakdown.total_score == null
+            ? "Aun no hay componentes aplicables suficientes para calcular un score publico."
+            : `Score final = Asistencia x ${scoreBreakdown.attendance_weight.toFixed(2)} + Votaciones x ${scoreBreakdown.voting_weight.toFixed(2)} + Comisiones x ${scoreBreakdown.committee_weight.toFixed(2)}.`}
         </p>
 
         <div className="score-rings">
@@ -154,6 +166,14 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             </div>
           </div>
           <div className="score-ring-box">
+            <div className="score-ring" style={ringStyle(votingValue, "#f97316")}>
+              <div className="score-ring-inner">
+                <div className="score-ring-value">{votingScore == null ? "N/D" : votingScore.toFixed(1)}</div>
+                <div className="score-ring-caption">Votaciones</div>
+              </div>
+            </div>
+          </div>
+          <div className="score-ring-box">
             <div className="score-ring" style={ringStyle(committeeValue, "#14b8a6")}>
               <div className="score-ring-inner">
                 <div className="score-ring-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(1)}</div>
@@ -166,12 +186,17 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
         <div className="score-stack-block">
           <div className="score-stack-track">
             <span className="score-segment-att" style={{ width: `${Math.max(0, Math.min(100, weightedAttendance))}%` }} />
+            <span className="score-segment-vot" style={{ width: `${Math.max(0, Math.min(100, weightedVoting))}%` }} />
             <span className="score-segment-com" style={{ width: `${Math.max(0, Math.min(100, weightedCommittee))}%` }} />
           </div>
           <div className="score-legend-grid">
             <div className="score-legend-item">
               <span className="legend-dot att" />
               <span>Aporte Asistencia ({attendanceWeightLabel}%): {weightedAttendance.toFixed(2)}</span>
+            </div>
+            <div className="score-legend-item">
+              <span className="legend-dot vot" />
+              <span>Aporte Votaciones ({votingWeightLabel}%): {weightedVoting.toFixed(2)}</span>
             </div>
             <div className="score-legend-item">
               <span className="legend-dot com" />
@@ -250,6 +275,13 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
             <div className="score-bar-value">{attendance == null ? "N/D" : `${attendance.toFixed(2)}%`}</div>
           </div>
           <div className="score-bar-row">
+            <div className="score-bar-label">Votaciones</div>
+            <div className="score-bar-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, votingValue))}%` }} />
+            </div>
+            <div className="score-bar-value">{votingScore == null ? "N/D" : `${votingScore.toFixed(2)}%`}</div>
+          </div>
+          <div className="score-bar-row">
             <div className="score-bar-label">Score comisiones</div>
             <div className="score-bar-track">
               <span style={{ width: `${Math.max(0, Math.min(100, committeeValue))}%` }} />
@@ -262,6 +294,13 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
               <span style={{ width: `${Math.max(0, Math.min(100, weightedAttendance))}%` }} />
             </div>
             <div className="score-bar-value">{weightedAttendance.toFixed(2)}</div>
+          </div>
+          <div className="score-bar-row">
+            <div className="score-bar-label">Aporte votaciones</div>
+            <div className="score-bar-track">
+              <span style={{ width: `${Math.max(0, Math.min(100, weightedVoting))}%` }} />
+            </div>
+            <div className="score-bar-value">{weightedVoting.toFixed(2)}</div>
           </div>
           <div className="score-bar-row">
             <div className="score-bar-label">Aporte comisiones</div>
