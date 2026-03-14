@@ -461,7 +461,7 @@ def list_parliamentarians(
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
-    where: List[str] = []
+    where: List[str] = ["COALESCE(p.source, '') <> 'legacy_diputados'"]
 
     if camara:
         where.append("p.camara = %(camara)s")
@@ -642,6 +642,7 @@ def count_by_camara() -> Dict[str, int]:
     sql = """
     SELECT camara, COUNT(*)::int AS total
     FROM parlamentarios
+    WHERE COALESCE(source, '') <> 'legacy_diputados'
     GROUP BY camara;
     """
     out = {"DIPUTADO": 0, "SENADOR": 0}
