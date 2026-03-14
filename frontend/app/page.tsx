@@ -53,10 +53,10 @@ export default async function Home({ searchParams }: any) {
     score: computeTransparencyScore(row),
   }));
 
-  const partyOptions = [
+  const partyOptions: string[] = [
     ...new Set(baseRows.map((row: any) => normalizeText(row.partido)).filter(isNonEmptyString)),
   ].sort(compareText);
-  const regionOptions = [
+  const regionOptions: string[] = [
     ...new Set(baseRows.map((row: any) => normalizeText(row.region)).filter(isNonEmptyString)),
   ].sort(compareText);
 
