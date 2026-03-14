@@ -138,7 +138,9 @@ export default async function ParliamentarianPage({ params }: { params: { id: st
           <div className="score-ring-box">
             <div className="score-ring" style={ringStyle(score, "#1d4ed8")}>
               <div className="score-ring-inner">
-                <div className="score-ring-value">{score.toFixed(1)}</div>
+                <div className="score-ring-value">
+                  {scoreBreakdown.total_score == null ? "N/D" : score.toFixed(1)}
+                </div>
                 <div className="score-ring-caption">Score</div>
               </div>
             </div>

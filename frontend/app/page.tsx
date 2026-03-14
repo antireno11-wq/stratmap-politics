@@ -103,8 +103,11 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
   }));
 
   const sortedRows = sortRows(rows, sortBy, sortOrder);
-  const avgScore = rows.length === 0 ? 0 : rows.reduce((acc: number, row: any) => acc + row.score, 0) / rows.length;
-  const top10 = sortRows(rows, "score", "desc").slice(0, 10);
+  const rowsWithScore = rows.filter((row: any) => row.score != null);
+  const avgScore = rowsWithScore.length === 0
+    ? null
+    : rowsWithScore.reduce((acc: number, row: any) => acc + row.score, 0) / rowsWithScore.length;
+  const top10 = sortRows(rowsWithScore, "score", "desc").slice(0, 10);
 
   return (
     <main>
@@ -131,7 +134,7 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
           <div className="kpi-label">Total parlamentarios</div>
         </div>
         <div className="card">
-          <div className="kpi-value">{avgScore.toFixed(2)}</div>
+          <div className="kpi-value">{avgScore == null ? "N/D" : avgScore.toFixed(2)}</div>
           <div className="kpi-label">Score promedio</div>
         </div>
         <div className="card">
@@ -176,9 +179,9 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
             <div key={row.id} className="score-bar-row">
               <div className="score-bar-label">{row.nombre}</div>
               <div className="score-bar-track">
-                <span style={{ width: `${Math.max(1, Math.min(100, row.score))}%` }} />
+                <span style={{ width: `${Math.max(1, Math.min(100, Number(row.score ?? 0))) }%` }} />
               </div>
-              <div className="score-bar-value">{row.score.toFixed(2)}</div>
+              <div className="score-bar-value">{row.score == null ? "N/D" : row.score.toFixed(2)}</div>
             </div>
           ))}
         </div>
@@ -203,7 +206,9 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
             <tbody>
               {sortedRows.map((row: any) => (
                 <tr key={row.id}>
-                  <td className={`score ${scoreTier(row.score)}`}>{row.score.toFixed(2)}</td>
+                  <td className={row.score == null ? "" : `score ${scoreTier(row.score)}`}>
+                    {row.score == null ? "N/D" : row.score.toFixed(2)}
+                  </td>
                   <td className="row-name"><Link href={`/parliamentarians/${row.id}`} title="Ver ficha completa">{row.nombre}</Link></td>
                   <td><span className="chamber-pill">{row.camara}</span></td>
                   <td>{row.partido}</td>
