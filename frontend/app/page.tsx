@@ -13,8 +13,8 @@ function isNonEmptyString(value: string): value is string {
   return value.length > 0;
 }
 
-function compareText(a: string, b: string) {
-  return a.localeCompare(b, "es", { sensitivity: "base" });
+function compareText(a: unknown, b: unknown) {
+  return String(a ?? "").localeCompare(String(b ?? ""), "es", { sensitivity: "base" });
 }
 
 function formatMaybeNumber(value: number | null, digits = 2) {
