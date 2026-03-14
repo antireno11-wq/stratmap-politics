@@ -683,7 +683,18 @@ def _is_new_without_historical_baseline(row: Dict[str, Any], reference_year: Opt
     if period_start != target_year:
         return False
     votes_expected = _safe_int(row.get("votes_expected_total"))
-    return votes_expected is None or votes_expected <= 0
+    if votes_expected is not None and votes_expected > 0:
+        return False
+    has_other_coverage = any(
+        [
+            _safe_int(row.get("sesiones_totales")) not in {None, 0},
+            row.get("asistencia_pct") is not None,
+            _safe_int(row.get("committee_count")) not in {None, 0},
+            row.get("committee_score") is not None,
+            row.get("voting_score") is not None,
+        ]
+    )
+    return not has_other_coverage
 
 
 def _current_role_rank(row: Dict[str, Any]) -> Tuple[float, int, int, int, int, float]:
