@@ -41,6 +41,19 @@ SESSION_XML = b"""<?xml version="1.0" encoding="utf-8"?>
 </SesionSala>
 """
 
+VOTES_YEAR_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<VotacionesColeccion xmlns="http://opendata.camara.cl/camaradiputados/v1">
+  <Votacion>
+    <Id>87794</Id>
+    <Fecha>2026-03-05T13:39:15</Fecha>
+  </Votacion>
+  <Votacion>
+    <Id>87793</Id>
+    <Fecha>2026-03-05T13:38:06</Fecha>
+  </Votacion>
+</VotacionesColeccion>
+"""
+
 VOTE_87794_XML = b"""<?xml version="1.0" encoding="utf-8"?>
 <Votacion xmlns="http://opendata.camara.cl/camaradiputados/v1">
   <Id>87794</Id>
@@ -81,13 +94,26 @@ class ChamberVotingTests(unittest.TestCase):
         def fake_request_xml(path: str, params=None):
             if path.endswith("retornarSesionAsistencia"):
                 return SESSION_XML
+            if path.endswith("retornarVotacionesXAnno"):
+                return VOTES_YEAR_XML
             if path.endswith("retornarVotacionDetalle") and params and params.get("prmVotacionId") == 87794:
                 return VOTE_87794_XML
             if path.endswith("retornarVotacionDetalle") and params and params.get("prmVotacionId") == 87793:
                 return VOTE_87793_XML
             raise AssertionError(f"Unexpected request: {path} {params}")
 
-        with patch.object(chamber, "fetch_sessions", return_value=[{"session_id": 4754, "fecha": None}]):
+        with patch.object(
+            chamber,
+            "fetch_sessions",
+            return_value=[
+                {
+                    "session_id": 4754,
+                    "fecha": None,
+                    "start_at": chamber._to_datetime("2026-03-05T10:11:25"),
+                    "end_at": chamber._to_datetime("2026-03-05T15:35:56"),
+                }
+            ],
+        ):
             with patch.object(chamber, "_request_xml", side_effect=fake_request_xml):
                 with patch.object(chamber, "_build_valid_deputy_name_set", return_value={"mercedes bulnes nunez"}):
                     stats_by_id, stats_by_name = chamber.fetch_voting_stats_by_deputy(2026, 2026, 50)

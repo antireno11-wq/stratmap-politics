@@ -262,6 +262,25 @@ def _to_date(value: Optional[str]) -> Optional[date]:
     return None
 
 
+def _to_datetime(value: Optional[str]) -> Optional[datetime]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%d-%m-%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M",
+    ):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _attendance_status_is_absent(status: str) -> bool:
     t = _normalize_text(status)
     absent_patterns = [
@@ -348,14 +367,22 @@ def _attendance_rows_from_session_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
     return rows
 
 
-def _session_vote_ids_from_xml(xml_bytes: bytes) -> List[int]:
+def _voting_items_from_year_xml(xml_bytes: bytes) -> List[Dict[str, Any]]:
     root = ET.fromstring(xml_bytes)
-    out: List[int] = []
+    out: List[Dict[str, Any]] = []
     for vote_node in _find_all(root, "Votacion"):
         vote_id = _to_int(_text(_find_child(vote_node, "Id")), 0)
-        if vote_id > 0:
-            out.append(vote_id)
-    return sorted(set(out))
+        if vote_id <= 0:
+            continue
+        vote_dt = _to_datetime(_text(_find_child(vote_node, "Fecha")))
+        out.append(
+            {
+                "vote_id": vote_id,
+                "fecha": vote_dt,
+            }
+        )
+    dedup = {int(item["vote_id"]): item for item in out}
+    return sorted(dedup.values(), key=lambda item: int(item["vote_id"]), reverse=True)
 
 
 def _vote_rows_from_vote_xml(xml_bytes: bytes) -> List[Dict[str, str]]:
@@ -752,11 +779,16 @@ def fetch_voting_stats_by_deputy(
     to_year: int,
     session_limit_per_year: int = 300,
 ) -> tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
-    all_sessions: List[int] = []
+    all_sessions: List[Dict[str, Any]] = []
+    all_votes: List[Dict[str, Any]] = []
     for year in range(from_year, to_year + 1):
         sessions = fetch_sessions(year=year, limit=session_limit_per_year)
-        all_sessions.extend([s["session_id"] for s in sessions])
-    session_ids = sorted(set(all_sessions), reverse=True)
+        all_sessions.extend(sessions)
+        votes_xml = _request_xml("WSLegislativo.asmx/retornarVotacionesXAnno", params={"prmAnno": year})
+        all_votes.extend(_voting_items_from_year_xml(votes_xml))
+    session_map = {int(s["session_id"]): s for s in all_sessions}
+    sessions = sorted(session_map.values(), key=lambda x: x["session_id"], reverse=True)
+    votes = sorted({int(v["vote_id"]): v for v in all_votes}.values(), key=lambda x: x["vote_id"], reverse=True)
 
     valid_names = _build_valid_deputy_name_set()
     stats_by_id: Dict[str, Dict[str, int]] = defaultdict(
@@ -778,14 +810,13 @@ def fetch_voting_stats_by_deputy(
         }
     )
 
-    for sid in session_ids:
+    session_presence_by_id: Dict[int, Dict[str, set[str]]] = {}
+
+    for session in sessions:
+        sid = int(session["session_id"])
         try:
             session_xml = _request_xml("WSSala.asmx/retornarSesionAsistencia", params={"prmSesionId": sid})
         except Exception:
-            continue
-
-        vote_ids = _session_vote_ids_from_xml(session_xml)
-        if not vote_ids:
             continue
 
         attendance_records = _attendance_rows_from_session_xml(session_xml)
@@ -804,7 +835,35 @@ def fetch_voting_stats_by_deputy(
             present_names.add(nombre_norm)
             if external_id:
                 present_ids.add(external_id)
+        session_presence_by_id[sid] = {"ids": present_ids, "names": present_names}
 
+    session_vote_ids: Dict[int, List[int]] = defaultdict(list)
+    for vote in votes:
+        vote_id = int(vote["vote_id"])
+        vote_dt = vote.get("fecha")
+        if vote_dt is None:
+            continue
+        for session in sessions:
+            start_at = session.get("start_at")
+            end_at = session.get("end_at")
+            if start_at is not None and end_at is not None and start_at <= vote_dt <= end_at:
+                session_vote_ids[int(session["session_id"])].append(vote_id)
+                break
+            session_date = session.get("fecha")
+            if session_date is not None and vote_dt.date() == session_date:
+                session_vote_ids[int(session["session_id"])].append(vote_id)
+                break
+
+    for session in sessions:
+        sid = int(session["session_id"])
+        vote_ids = sorted(set(session_vote_ids.get(sid, [])))
+        if not vote_ids:
+            continue
+        presence = session_presence_by_id.get(sid)
+        if not presence:
+            continue
+        present_ids = presence["ids"]
+        present_names = presence["names"]
         if not present_ids and not present_names:
             continue
 
@@ -869,13 +928,20 @@ def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
         if estado and "celebrada" not in estado:
             continue
 
-        fecha = _to_date(
+        start_at = _to_datetime(
             _first_present(
                 row,
                 ["fechainicio", "fecha_inicio", "fecha", "f_sesion", "fecha_sesion", "sesfecha"],
             )
         )
-        sessions.append({"session_id": session_id, "fecha": fecha})
+        end_at = _to_datetime(_first_present(row, ["fechatermino", "fecha_termino"]))
+        fecha = start_at.date() if start_at is not None else _to_date(
+            _first_present(
+                row,
+                ["fechainicio", "fecha_inicio", "fecha", "f_sesion", "fecha_sesion", "sesfecha"],
+            )
+        )
+        sessions.append({"session_id": session_id, "fecha": fecha, "start_at": start_at, "end_at": end_at})
 
     # Fallback robusto: parsea hojas XML por nombre de tag y texto escapado
     if not sessions:
@@ -891,7 +957,7 @@ def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
                 if ("ses" in key and "id" in key) or key in {"idsesion", "id_sesion", "sesionid", "sessionid"}:
                     sid = _to_int(value, -1)
                     if sid > 0:
-                        sessions.append({"session_id": sid, "fecha": None})
+                        sessions.append({"session_id": sid, "fecha": None, "start_at": None, "end_at": None})
         except Exception:
             pass
 
@@ -901,7 +967,7 @@ def fetch_sessions(year: int, limit: int = 300) -> List[Dict[str, Any]]:
             for m in re.finditer(r"<(?:sesid|ses_id|idsesion|id_sesion|sesionid|sessionid)>\s*(\d+)\s*</", raw, re.IGNORECASE):
                 sid = _to_int(m.group(1), -1)
                 if sid > 0:
-                    sessions.append({"session_id": sid, "fecha": None})
+                    sessions.append({"session_id": sid, "fecha": None, "start_at": None, "end_at": None})
         except Exception:
             pass
 

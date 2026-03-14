@@ -27,6 +27,11 @@ function pct(value: number | null, digits = 1) {
   return `${value.toFixed(digits)}%`;
 }
 
+function formatWeight(value: number | null, digits = 2) {
+  if (value == null || Number.isNaN(value)) return "N/A";
+  return value.toFixed(digits);
+}
+
 function clampPercent(value: number | null) {
   if (value == null || Number.isNaN(value)) return 0;
   return Math.max(0, Math.min(100, value));
@@ -57,6 +62,8 @@ export default async function ParliamentarianPage({ params }: any) {
   const attendance = scoreBreakdown.attendance_score;
   const votingScore = scoreBreakdown.voting_score;
   const committeeScore = scoreBreakdown.committee_score;
+  const votingParticipation =
+    p.voting_participation_pct == null ? null : Number(p.voting_participation_pct);
   const biography = safeBiography(p.biografia);
   const rawBiographyUrl = String(p.biografia_url ?? "").trim();
   const biographyUrl = !rawBiographyUrl || rawBiographyUrl === "Sin dato" ? null : rawBiographyUrl;
@@ -110,6 +117,27 @@ export default async function ParliamentarianPage({ params }: any) {
     },
   ];
 
+  const scoreRows = [
+    {
+      key: "attendance",
+      label: "Asistencia",
+      component: scoreBreakdown.components.attendance,
+      valueLabel: pct(attendance),
+    },
+    {
+      key: "voting",
+      label: "Votaciones",
+      component: scoreBreakdown.components.voting,
+      valueLabel: pct(votingParticipation),
+    },
+    {
+      key: "committees",
+      label: "Comisiones",
+      component: scoreBreakdown.components.committees,
+      valueLabel: committeeScore == null ? "N/D" : committeeScore.toFixed(1),
+    },
+  ];
+
   return (
     <main>
       <Link className="top-link" href="/">
@@ -152,11 +180,19 @@ export default async function ParliamentarianPage({ params }: any) {
         </article>
         <article className="card metric-panel">
           <div className="metric-label">Participación en votaciones</div>
-          <div className="metric-value">{pct(votingScore)}</div>
+          <div className="metric-value">{pct(votingParticipation)}</div>
+          <div className="metric-foot">
+            {votingParticipation == null
+              ? "Todavía no hay porcentaje público utilizable"
+              : `Score de votaciones: ${pct(votingScore)}`}
+          </div>
         </article>
         <article className="card metric-panel">
           <div className="metric-label">Score comisiones</div>
           <div className="metric-value">{committeeScore == null ? "N/D" : committeeScore.toFixed(1)}</div>
+          <div className="metric-foot">
+            {scoreBreakdown.components.committees.applicable ? "Componente activo en el score" : "No aplica en este registro"}
+          </div>
         </article>
         <article className="card metric-panel">
           <div className="metric-label">Historial de votos</div>
@@ -269,18 +305,32 @@ export default async function ParliamentarianPage({ params }: any) {
             </div>
           </div>
           <div className="score-breakdown-list">
-            <div className="score-breakdown-row">
-              <span>Asistencia</span>
-              <strong>{scoreBreakdown.attendance_weight.toFixed(2)}</strong>
-            </div>
-            <div className="score-breakdown-row">
-              <span>Votaciones</span>
-              <strong>{scoreBreakdown.voting_weight.toFixed(2)}</strong>
-            </div>
-            <div className="score-breakdown-row">
-              <span>Comisiones</span>
-              <strong>{scoreBreakdown.committee_weight.toFixed(2)}</strong>
-            </div>
+            {scoreRows.map((row) => (
+              <div
+                key={row.key}
+                className={`score-breakdown-row${row.component.applicable ? "" : " score-breakdown-row-inactive"}`}
+              >
+                <div className="score-breakdown-copy">
+                  <span>{row.label}</span>
+                  <div className="score-breakdown-meta">
+                    <span>Valor: {row.component.applicable ? row.valueLabel : "No aplica"}</span>
+                    <span>
+                      {row.component.applicable
+                        ? `Peso efectivo: ${formatWeight(row.component.effective_weight ?? null)}`
+                        : "Fuera del cálculo final"}
+                    </span>
+                  </div>
+                </div>
+                <div className="score-breakdown-side">
+                  <span
+                    className={`component-chip ${row.component.applicable ? "component-chip-active" : "component-chip-inactive"}`}
+                  >
+                    {row.component.applicable ? "Aplica" : "No aplica"}
+                  </span>
+                  <strong>{row.component.applicable ? formatWeight(row.component.effective_weight ?? null) : "N/A"}</strong>
+                </div>
+              </div>
+            ))}
           </div>
           <div className="score-stack-block">
             <div className="score-stack-track">
