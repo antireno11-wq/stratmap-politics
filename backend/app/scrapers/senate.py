@@ -23,6 +23,8 @@ SENATE_ATTENDANCE_URL = os.getenv(
 SENATE_BACKEND_BASE = os.getenv("SENATE_BACKEND_BASE", "https://web-back.senado.cl").rstrip("/")
 HEMICYCLE_ENDPOINT = os.getenv("SENATE_HEMICYCLE_ENDPOINT", "/api/hemicycle")
 ATTENDANCE_ENDPOINT = os.getenv("SENATE_ATTENDANCE_ENDPOINT", "/api/sessions/attendance")
+SESSIONS_ENDPOINT = os.getenv("SENATE_SESSIONS_ENDPOINT", "/api/sessions")
+VOTES_ENDPOINT = os.getenv("SENATE_VOTES_ENDPOINT", "/api/votes")
 PARLIAMENTARIAN_COMMISSIONS_ENDPOINT = os.getenv("SENATE_PARLIAMENTARIAN_COMMISSIONS_ENDPOINT", "/api/parliamentarians/commissions")
 PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT = os.getenv(
     "SENATE_PARLIAMENTARIAN_COMMITTEE_ATTENDANCE_ENDPOINT",
@@ -196,6 +198,12 @@ def _extract_period(periodos: Any) -> str:
 
 def _empty_committee_fields() -> Dict[str, Any]:
     return {
+        "votes_cast_total": None,
+        "votes_expected_total": None,
+        "voting_participation_pct": None,
+        "votes_yes_total": None,
+        "votes_no_total": None,
+        "votes_abstention_total": None,
         "committee_memberships": [],
         "committee_sessions_attended": None,
         "committee_total_sessions": None,
@@ -205,6 +213,200 @@ def _empty_committee_fields() -> Dict[str, Any]:
         "committee_activity_interventions": None,
         "committee_topic_counts": None,
     }
+
+
+def _parse_senate_date(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_senate_datetime(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%d-%m-%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y %H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _senator_full_name_from_vote_row(row: Dict[str, Any]) -> str:
+    return " ".join(
+        part
+        for part in [
+            str(row.get("NOMBRE") or "").strip(),
+            str(row.get("APELLIDO_PATERNO") or "").strip(),
+            str(row.get("APELLIDO_MATERNO") or "").strip(),
+        ]
+        if part
+    ).strip()
+
+
+def _fetch_sessions_for_year(year: int) -> List[Dict[str, Any]]:
+    limit = 200
+    offset = 0
+    out: List[Dict[str, Any]] = []
+
+    while True:
+        payload = _backend_get_json(SESSIONS_ENDPOINT, {"limit": limit, "offset": offset})
+        rows = _payload_data_rows(payload)
+        if not rows:
+            break
+
+        stop = False
+        for row in rows:
+            session_dt = _parse_senate_date(row.get("FECHA"))
+            if session_dt is None:
+                continue
+            if session_dt.year > year:
+                continue
+            if session_dt.year < year:
+                stop = True
+                continue
+            out.append(row)
+
+        if stop or len(rows) < limit:
+            break
+        offset += limit
+
+    return out
+
+
+def _fetch_votes_for_legislature(legislature_id: int) -> List[Dict[str, Any]]:
+    limit = 200
+    offset = 0
+    out: List[Dict[str, Any]] = []
+
+    while True:
+        payload = _backend_get_json(
+            VOTES_ENDPOINT,
+            {"id_legislatura": legislature_id, "limit": limit, "offset": offset},
+        )
+        rows = _payload_data_rows(payload)
+        if not rows:
+            break
+        out.extend(rows)
+        if len(rows) < limit:
+            break
+        offset += limit
+
+    return out
+
+
+def fetch_voting_stats_by_senator(year: int) -> Tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
+    sessions = _fetch_sessions_for_year(year)
+    if not sessions:
+        return {}, {}, {}
+
+    session_legislature_by_id: Dict[int, int] = {}
+    legislature_ids: List[int] = []
+    for row in sessions:
+        session_id = _to_int(row.get("ID_SESION"), 0)
+        legislature_id = _to_int(row.get("ID_LEGISLATURA"), 0)
+        if session_id <= 0 or legislature_id <= 0:
+            continue
+        session_legislature_by_id[session_id] = legislature_id
+        if legislature_id not in legislature_ids:
+            legislature_ids.append(legislature_id)
+
+    if not legislature_ids:
+        return {}, {}, {}
+
+    stats_by_id: Dict[str, Dict[str, Any]] = {}
+    stats_by_slug: Dict[str, Dict[str, Any]] = {}
+    stats_by_name: Dict[str, Dict[str, Any]] = {}
+    total_votes_by_legislature: Dict[int, int] = {}
+
+    def _bucket(target: Dict[str, Dict[str, Any]], key: str) -> Dict[str, Any]:
+        if key not in target:
+            target[key] = {
+                "votes_cast": 0,
+                "votes_yes": 0,
+                "votes_no": 0,
+                "votes_abstention": 0,
+                "_legislatures": set(),
+            }
+        return target[key]
+
+    for legislature_id in legislature_ids:
+        votes = _fetch_votes_for_legislature(legislature_id)
+        filtered_votes: List[Dict[str, Any]] = []
+        for vote in votes:
+            session_id = _to_int(vote.get("ID_SESION"), 0)
+            vote_dt = _parse_senate_datetime(vote.get("FECHA_VOTACION"))
+            if session_id <= 0 or session_legislature_by_id.get(session_id) != legislature_id:
+                continue
+            if vote_dt is not None and vote_dt.year != year:
+                continue
+            filtered_votes.append(vote)
+
+        total_votes_by_legislature[legislature_id] = len(filtered_votes)
+
+        for vote in filtered_votes:
+            categories = vote.get("VOTACIONES")
+            if not isinstance(categories, dict):
+                continue
+            for category_name, normalized in (
+                ("SI", "yes"),
+                ("NO", "no"),
+                ("ABSTENCION", "abstention"),
+                ("PAREO", "other"),
+            ):
+                entries = categories.get(category_name)
+                if not isinstance(entries, list):
+                    continue
+                for person in entries:
+                    if not isinstance(person, dict):
+                        continue
+                    senate_id = str(person.get("PARLID") or "").strip()
+                    slug = str(person.get("SLUG") or "").strip().lower()
+                    nombre = _senator_full_name_from_vote_row(person)
+                    nombre_norm = _normalize_name(nombre)
+
+                    for container, key in (
+                        (stats_by_id, senate_id),
+                        (stats_by_slug, slug),
+                        (stats_by_name, nombre_norm),
+                    ):
+                        if not key:
+                            continue
+                        bucket = _bucket(container, key)
+                        bucket["votes_cast"] += 1
+                        if normalized == "yes":
+                            bucket["votes_yes"] += 1
+                        elif normalized == "no":
+                            bucket["votes_no"] += 1
+                        elif normalized == "abstention":
+                            bucket["votes_abstention"] += 1
+                        bucket["_legislatures"].add(legislature_id)
+
+    def _finalize(raw: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
+        out: Dict[str, Dict[str, int]] = {}
+        for key, stats in raw.items():
+            legislatures = stats.get("_legislatures") or set()
+            votes_expected = sum(
+                total_votes_by_legislature.get(int(legislature_id), 0)
+                for legislature_id in legislatures
+            )
+            out[key] = {
+                "votes_cast": int(stats.get("votes_cast", 0)),
+                "votes_expected": int(votes_expected),
+                "votes_yes": int(stats.get("votes_yes", 0)),
+                "votes_no": int(stats.get("votes_no", 0)),
+                "votes_abstention": int(stats.get("votes_abstention", 0)),
+            }
+        return out
+
+    return _finalize(stats_by_id), _finalize(stats_by_slug), _finalize(stats_by_name)
 
 
 def _committee_totals_for_id(
@@ -773,6 +975,12 @@ def _dedup_senators(out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "asistencia_pct",
             "sesiones_totales",
             "sesiones_ausentes",
+            "votes_cast_total",
+            "votes_expected_total",
+            "voting_participation_pct",
+            "votes_yes_total",
+            "votes_no_total",
+            "votes_abstention_total",
             "committee_sessions_attended",
             "committee_total_sessions",
             "committee_count",
@@ -837,6 +1045,46 @@ def _merge_attendance(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return senators
 
 
+def _merge_voting_fields(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not senators:
+        return senators
+
+    try:
+        stats_by_id, stats_by_slug, stats_by_name = fetch_voting_stats_by_senator(datetime.now().year)
+    except Exception:
+        return senators
+
+    for item in senators:
+        stats: Optional[Dict[str, int]] = None
+        senate_id = str(item.get("_senate_id") or "").strip()
+        if senate_id and senate_id in stats_by_id:
+            stats = stats_by_id[senate_id]
+        if stats is None:
+            slug = str(item.get("external_id") or "").strip().lower()
+            if slug and slug in stats_by_slug:
+                stats = stats_by_slug[slug]
+        if stats is None:
+            norm_name = _normalize_name(item.get("nombre", ""))
+            if norm_name in stats_by_name:
+                stats = stats_by_name[norm_name]
+        if not stats:
+            continue
+
+        votes_expected = int(stats.get("votes_expected", 0))
+        votes_cast = int(stats.get("votes_cast", 0))
+        if votes_expected <= 0:
+            continue
+
+        item["votes_cast_total"] = votes_cast
+        item["votes_expected_total"] = votes_expected
+        item["voting_participation_pct"] = round((votes_cast / votes_expected) * 100.0, 2)
+        item["votes_yes_total"] = int(stats.get("votes_yes", 0))
+        item["votes_no_total"] = int(stats.get("votes_no", 0))
+        item["votes_abstention_total"] = int(stats.get("votes_abstention", 0))
+
+    return senators
+
+
 def fetch_senators() -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
@@ -849,6 +1097,7 @@ def fetch_senators() -> List[Dict[str, Any]]:
         out = _fetch_senators_from_html()
 
     out = _merge_attendance(out)
+    out = _merge_voting_fields(out)
     out = _merge_biographies(out)
     out = _merge_committee_fields(out)
     out = _dedup_senators(out)
