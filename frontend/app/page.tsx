@@ -17,6 +17,17 @@ function compareText(a: unknown, b: unknown) {
   return String(a ?? "").localeCompare(String(b ?? ""), "es", { sensitivity: "base" });
 }
 
+function uniqueSortedStrings(values: unknown[]): string[] {
+  const out = Array.from(
+    new Set(
+      values
+        .map((value) => normalizeText(value))
+        .filter((value): value is string => value.length > 0)
+    )
+  );
+  return out.sort((a, b) => compareText(a, b));
+}
+
 function formatMaybeNumber(value: number | null, digits = 2) {
   if (value == null || Number.isNaN(value)) return "N/D";
   return value.toFixed(digits);
@@ -53,12 +64,8 @@ export default async function Home({ searchParams }: any) {
     score: computeTransparencyScore(row),
   }));
 
-  const partyOptions: string[] = [
-    ...new Set(baseRows.map((row: any) => normalizeText(row.partido)).filter(isNonEmptyString)),
-  ].sort(compareText);
-  const regionOptions: string[] = [
-    ...new Set(baseRows.map((row: any) => normalizeText(row.region)).filter(isNonEmptyString)),
-  ].sort(compareText);
+  const partyOptions = uniqueSortedStrings(baseRows.map((row: any) => row.partido));
+  const regionOptions = uniqueSortedStrings(baseRows.map((row: any) => row.region));
 
   const filteredRows = baseRows.filter((row: any) => {
     if (selectedParty && normalizeText(row.partido) !== selectedParty) return false;
