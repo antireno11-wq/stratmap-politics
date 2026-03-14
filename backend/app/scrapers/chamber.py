@@ -18,8 +18,12 @@ BASE_URL = os.getenv(
     "CHAMBER_API_BASE",
     "https://opendata.camara.cl/camaradiputados/WServices",
 ).rstrip("/")
-DEPUTY_PROFILE_URL = os.getenv(
-    "CHAMBER_DEPUTY_PROFILE_URL",
+DEPUTY_BIO_URL = os.getenv(
+    "CHAMBER_DEPUTY_BIO_URL",
+    "https://www.camara.cl/diputados/detalle/biografia.aspx",
+).rstrip("/")
+DEPUTY_ATTENDANCE_URL = os.getenv(
+    "CHAMBER_DEPUTY_ATTENDANCE_URL",
     "https://www.camara.cl/diputados/detalle/asistencia_sala.aspx",
 ).rstrip("/")
 
@@ -515,7 +519,7 @@ def fetch_deputies_periodo_actual(
                     region=region,
                     periodo=f"{datetime.now().year}-ACTUAL",
                 ),
-                "biografia_url": f"{DEPUTY_PROFILE_URL}?prmId={external_id}",
+                "biografia_url": f"{DEPUTY_BIO_URL}?prmId={external_id}",
                 **_empty_committee_fields(),
             }
         )
@@ -619,7 +623,7 @@ def fetch_deputy_detail(external_id: str) -> Optional[Dict[str, str]]:
 
 def fetch_deputy_detail_from_profile_page(external_id: str) -> Optional[Dict[str, str]]:
     try:
-        response = requests.get(DEPUTY_PROFILE_URL, params={"prmId": external_id}, timeout=30)
+        response = requests.get(DEPUTY_BIO_URL, params={"prmId": external_id}, timeout=30)
         response.raise_for_status()
     except Exception:
         return None
@@ -658,16 +662,22 @@ def fetch_deputy_detail_from_profile_page(external_id: str) -> Optional[Dict[str
     if periodo_match:
         periodo = periodo_match.group(1).replace("–", "-").replace(" ", "")
 
-    asistencia_match = re.search(
-        r"Porcentaje de Asistencia\s*([0-9]+(?:[\.,][0-9]+)?)%",
-        text,
-        re.IGNORECASE,
-    )
-    if asistencia_match:
-        try:
-            asistencia_pct = float(asistencia_match.group(1).replace(",", "."))
-        except ValueError:
-            asistencia_pct = None
+    try:
+        attendance_response = requests.get(DEPUTY_ATTENDANCE_URL, params={"prmId": external_id}, timeout=30)
+        attendance_response.raise_for_status()
+        attendance_text = BeautifulSoup(attendance_response.text, "html.parser").get_text(" ", strip=True)
+        asistencia_match = re.search(
+            r"Porcentaje de Asistencia\s*([0-9]+(?:[\.,][0-9]+)?)%",
+            attendance_text,
+            re.IGNORECASE,
+        )
+        if asistencia_match:
+            try:
+                asistencia_pct = float(asistencia_match.group(1).replace(",", "."))
+            except ValueError:
+                asistencia_pct = None
+    except Exception:
+        pass
 
     return {
         "distrito_circunscripcion": distrito,
@@ -1115,7 +1125,7 @@ def build_deputy_profiles(
             region=deputy.get("region", "Sin dato"),
             periodo=deputy.get("periodo", f"{datetime.now().year}-ACTUAL"),
         )
-        biography_url = deputy.get("biografia_url") or f"{DEPUTY_PROFILE_URL}?prmId={deputy['external_id']}"
+        biography_url = deputy.get("biografia_url") or f"{DEPUTY_BIO_URL}?prmId={deputy['external_id']}"
 
         out.append(
             {
