@@ -180,9 +180,10 @@ select {
 .score-bar-label {
   font-size: 0.87rem;
   color: #344054;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.22;
 }
 
 .score-bar-track {

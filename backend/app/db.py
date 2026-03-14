@@ -536,6 +536,14 @@ def _normalize_person_name(name: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _name_richness(name: Any) -> Tuple[int, int]:
+    text = str(name or "").strip()
+    if not text:
+        return (0, 0)
+    tokens = [token for token in text.split() if token]
+    return (len(tokens), len(text))
+
+
 def _current_role_rank(row: Dict[str, Any]) -> Tuple[float, int, int, int, int, float]:
     party = str(row.get("partido") or "").strip().lower()
     region = str(row.get("region") or "").strip().lower()
@@ -593,7 +601,11 @@ def _dedup_by_current_role(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if len(candidates) == 1:
             selected.append(candidates[0])
             continue
-        selected.append(max(candidates, key=_current_role_rank))
+        chosen = max(candidates, key=_current_role_rank)
+        best_name = max(candidates, key=lambda row: _name_richness(row.get("nombre")))
+        if _name_richness(best_name.get("nombre")) > _name_richness(chosen.get("nombre")):
+            chosen = {**chosen, "nombre": best_name.get("nombre")}
+        selected.append(chosen)
 
     selected.sort(key=lambda r: (str(r.get("camara") or ""), str(r.get("nombre") or "")))
     return selected

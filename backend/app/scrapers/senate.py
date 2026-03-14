@@ -66,6 +66,14 @@ def _normalize_name(name: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
+def _name_richness(name: Any) -> Tuple[int, int]:
+    text = str(name or "").strip()
+    if not text:
+        return (0, 0)
+    tokens = [token for token in text.split() if token]
+    return (len(tokens), len(text))
+
+
 def _to_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(str(value).strip()))
@@ -752,6 +760,8 @@ def _dedup_senators(out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             dedup[key] = item
             continue
         current = dedup[key]
+        if _name_richness(item.get("nombre")) > _name_richness(current.get("nombre")):
+            current["nombre"] = item["nombre"]
         # Conserva la versión más rica campo a campo.
         for field in ["nombre", "partido", "distrito_circunscripcion", "region", "periodo"]:
             if _is_missing(current.get(field, "")) and not _is_missing(item.get(field, "")):
