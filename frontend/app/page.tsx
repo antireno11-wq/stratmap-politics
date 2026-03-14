@@ -9,6 +9,10 @@ function normalizeText(value: unknown) {
   return text;
 }
 
+function isNonEmptyString(value: string): value is string {
+  return value.length > 0;
+}
+
 function compareText(a: string, b: string) {
   return a.localeCompare(b, "es", { sensitivity: "base" });
 }
@@ -53,8 +57,12 @@ export default async function Home({
     score: computeTransparencyScore(row),
   }));
 
-  const partyOptions = [...new Set(baseRows.map((row: any) => normalizeText(row.partido)).filter(Boolean))].sort(compareText);
-  const regionOptions = [...new Set(baseRows.map((row: any) => normalizeText(row.region)).filter(Boolean))].sort(compareText);
+  const partyOptions = [
+    ...new Set(baseRows.map((row: any) => normalizeText(row.partido)).filter(isNonEmptyString)),
+  ].sort(compareText);
+  const regionOptions = [
+    ...new Set(baseRows.map((row: any) => normalizeText(row.region)).filter(isNonEmptyString)),
+  ].sort(compareText);
 
   const filteredRows = baseRows.filter((row: any) => {
     if (selectedParty && normalizeText(row.partido) !== selectedParty) return false;
