@@ -302,29 +302,41 @@ def _fetch_votes_for_legislature(legislature_id: int) -> List[Dict[str, Any]]:
     return out
 
 
-def fetch_voting_stats_by_senator(year: int) -> Tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
-    sessions = _fetch_sessions_for_year(year)
-    if not sessions:
+def fetch_voting_stats_by_senator(
+    from_year: int,
+    to_year: Optional[int] = None,
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, Dict[str, int]], Dict[str, Dict[str, int]]]:
+    end_year = from_year if to_year is None else to_year
+    if end_year < from_year:
+        end_year = from_year
+
+    all_sessions: List[Dict[str, Any]] = []
+    for year in range(from_year, end_year + 1):
+        all_sessions.extend(_fetch_sessions_for_year(year))
+
+    if not all_sessions:
         return {}, {}, {}
 
     session_legislature_by_id: Dict[int, int] = {}
     legislature_ids: List[int] = []
-    for row in sessions:
+    valid_session_ids: set[int] = set()
+    for row in all_sessions:
         session_id = _to_int(row.get("ID_SESION"), 0)
         legislature_id = _to_int(row.get("ID_LEGISLATURA"), 0)
         if session_id <= 0 or legislature_id <= 0:
             continue
+        valid_session_ids.add(session_id)
         session_legislature_by_id[session_id] = legislature_id
         if legislature_id not in legislature_ids:
             legislature_ids.append(legislature_id)
 
-    if not legislature_ids:
+    if not legislature_ids or not valid_session_ids:
         return {}, {}, {}
 
     stats_by_id: Dict[str, Dict[str, Any]] = {}
     stats_by_slug: Dict[str, Dict[str, Any]] = {}
     stats_by_name: Dict[str, Dict[str, Any]] = {}
-    total_votes_by_legislature: Dict[int, int] = {}
+    total_votes_by_session: Dict[int, int] = {}
 
     def _bucket(target: Dict[str, Dict[str, Any]], key: str) -> Dict[str, Any]:
         if key not in target:
@@ -333,25 +345,20 @@ def fetch_voting_stats_by_senator(year: int) -> Tuple[Dict[str, Dict[str, int]],
                 "votes_yes": 0,
                 "votes_no": 0,
                 "votes_abstention": 0,
-                "_legislatures": set(),
+                "_sessions": set(),
             }
         return target[key]
 
     for legislature_id in legislature_ids:
         votes = _fetch_votes_for_legislature(legislature_id)
-        filtered_votes: List[Dict[str, Any]] = []
         for vote in votes:
             session_id = _to_int(vote.get("ID_SESION"), 0)
-            vote_dt = _parse_senate_datetime(vote.get("FECHA_VOTACION"))
-            if session_id <= 0 or session_legislature_by_id.get(session_id) != legislature_id:
+            if session_id <= 0 or session_id not in valid_session_ids:
                 continue
-            if vote_dt is not None and vote_dt.year != year:
+            if session_legislature_by_id.get(session_id) != legislature_id:
                 continue
-            filtered_votes.append(vote)
+            total_votes_by_session[session_id] = total_votes_by_session.get(session_id, 0) + 1
 
-        total_votes_by_legislature[legislature_id] = len(filtered_votes)
-
-        for vote in filtered_votes:
             categories = vote.get("VOTACIONES")
             if not isinstance(categories, dict):
                 continue
@@ -387,16 +394,13 @@ def fetch_voting_stats_by_senator(year: int) -> Tuple[Dict[str, Dict[str, int]],
                             bucket["votes_no"] += 1
                         elif normalized == "abstention":
                             bucket["votes_abstention"] += 1
-                        bucket["_legislatures"].add(legislature_id)
+                        bucket["_sessions"].add(session_id)
 
     def _finalize(raw: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, int]]:
         out: Dict[str, Dict[str, int]] = {}
         for key, stats in raw.items():
-            legislatures = stats.get("_legislatures") or set()
-            votes_expected = sum(
-                total_votes_by_legislature.get(int(legislature_id), 0)
-                for legislature_id in legislatures
-            )
+            sessions = stats.get("_sessions") or set()
+            votes_expected = sum(total_votes_by_session.get(int(session_id), 0) for session_id in sessions)
             out[key] = {
                 "votes_cast": int(stats.get("votes_cast", 0)),
                 "votes_expected": int(votes_expected),
@@ -1049,8 +1053,14 @@ def _merge_voting_fields(senators: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     if not senators:
         return senators
 
+    current_year = datetime.now().year
+    voting_from_year = max(2010, int(os.getenv("SENATE_VOTING_FROM_YEAR", str(current_year - 4))))
+    voting_to_year = max(2010, int(os.getenv("SENATE_VOTING_TO_YEAR", str(current_year - 1))))
+    if voting_to_year < voting_from_year:
+        voting_from_year = voting_to_year
+
     try:
-        stats_by_id, stats_by_slug, stats_by_name = fetch_voting_stats_by_senator(datetime.now().year)
+        stats_by_id, stats_by_slug, stats_by_name = fetch_voting_stats_by_senator(voting_from_year, voting_to_year)
     except Exception:
         return senators
 

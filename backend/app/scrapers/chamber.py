@@ -1045,6 +1045,10 @@ def build_deputy_profiles(
 ) -> List[Dict[str, Any]]:
     current_year = datetime.now().year
     from_year = int(os.getenv("CHAMBER_ATTENDANCE_FROM_YEAR", str(current_year)))
+    voting_from_year = int(os.getenv("CHAMBER_VOTING_FROM_YEAR", str(max(2010, current_year - 4))))
+    voting_to_year = int(os.getenv("CHAMBER_VOTING_TO_YEAR", str(max(2010, current_year - 1))))
+    if voting_to_year < voting_from_year:
+        voting_from_year = voting_to_year
     deputies = fetch_deputies_periodo_actual(
         enrich_profile_page=enrich_profile_page,
         enrich_offset=enrich_offset,
@@ -1061,8 +1065,8 @@ def build_deputy_profiles(
             session_limit_per_year=300,
         )
         voting_by_id, voting_by_name = fetch_voting_stats_by_deputy(
-            from_year=from_year,
-            to_year=current_year,
+            from_year=voting_from_year,
+            to_year=voting_to_year,
             session_limit_per_year=300,
         )
 

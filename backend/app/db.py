@@ -616,6 +616,7 @@ def list_parliamentarians(
 
     out = [dict(r) for r in rows]
     out = [row for row in out if not _is_broken_legacy_row(row)]
+    out = [row for row in out if not _is_new_without_historical_baseline(row)]
 
     if unique_people and not camara:
         out = _dedup_by_current_role(out)
@@ -664,6 +665,25 @@ def _is_broken_legacy_row(row: Dict[str, Any]) -> bool:
         ]
     )
     return not has_any_public_data
+
+
+def _period_start_year(periodo: Any) -> Optional[int]:
+    match = re.match(r"\s*(\d{4})", str(periodo or "").strip())
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _is_new_without_historical_baseline(row: Dict[str, Any], reference_year: Optional[int] = None) -> bool:
+    target_year = reference_year or datetime.now().year
+    period_start = _period_start_year(row.get("periodo"))
+    if period_start != target_year:
+        return False
+    votes_expected = _safe_int(row.get("votes_expected_total"))
+    return votes_expected is None or votes_expected <= 0
 
 
 def _current_role_rank(row: Dict[str, Any]) -> Tuple[float, int, int, int, int, float]:
@@ -779,6 +799,8 @@ def count_by_camara() -> Dict[str, int]:
             for row in cur.fetchall():
                 record = dict(row)
                 if _is_broken_legacy_row(record):
+                    continue
+                if _is_new_without_historical_baseline(record):
                     continue
                 out[str(record.get("camara") or "")] = out.get(str(record.get("camara") or ""), 0) + 1
     return out
