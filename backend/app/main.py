@@ -100,7 +100,7 @@ def ingest_status() -> dict:
 
 @app.post("/api/v1/ingest/chamber/deputies")
 def ingest_chamber_deputies(
-    enrich_profile_page: bool = Query(default=False),
+    enrich_profile_page: bool = Query(default=True),
     enrich_offset: int = Query(default=0, ge=0),
     enrich_limit: int = Query(default=0, ge=0, le=200),
 ) -> dict:

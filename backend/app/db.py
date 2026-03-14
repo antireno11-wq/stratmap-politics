@@ -167,6 +167,47 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
+def _is_missing_public_text(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"", "sin dato", "none", "null"}
+
+
+def _prefer_public_text(new_value: Any, current_value: Any) -> Any:
+    if _is_missing_public_text(new_value) and not _is_missing_public_text(current_value):
+        return current_value
+    return new_value
+
+
+def _merge_existing_public_fields(item: Dict[str, Any], existing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not existing:
+        return item
+    merged = dict(item)
+    merged["partido"] = _prefer_public_text(item.get("partido"), existing.get("partido"))
+    merged["distrito_circunscripcion"] = _prefer_public_text(
+        item.get("distrito_circunscripcion") or item.get("distrito") or item.get("circunscripcion"),
+        existing.get("distrito_circunscripcion"),
+    )
+    merged["region"] = _prefer_public_text(item.get("region"), existing.get("region"))
+    merged["periodo"] = _prefer_public_text(item.get("periodo"), existing.get("periodo"))
+    if not item.get("biografia") and existing.get("biografia"):
+        merged["biografia"] = existing.get("biografia")
+    if not item.get("biografia_url") and existing.get("biografia_url"):
+        merged["biografia_url"] = existing.get("biografia_url")
+    return merged
+
+
+def _existing_parliamentarian_fields(cur: psycopg.Cursor, camara: str) -> Dict[str, Dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT external_id, partido, distrito_circunscripcion, region, periodo, biografia, biografia_url
+        FROM parlamentarios
+        WHERE camara = %(camara)s
+        """,
+        {"camara": camara},
+    )
+    return {str(row["external_id"]): dict(row) for row in cur.fetchall()}
+
+
 def _estimate_committee_avg(items: List[Dict[str, Any]]) -> Optional[float]:
     counts: List[int] = []
     for item in items:
@@ -383,8 +424,11 @@ def replace_parliamentarians(camara: str, items: List[Dict[str, Any]], source: s
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            existing_by_external_id = _existing_parliamentarian_fields(cur, clean_camara)
             cur.execute("DELETE FROM parlamentarios WHERE camara = %(camara)s", {"camara": clean_camara})
             for item in items:
+                existing = existing_by_external_id.get(str(item.get("external_id", "")).strip())
+                item = _merge_existing_public_fields(item, existing)
                 params = {
                     "camara": clean_camara,
                     "external_id": str(item.get("external_id", "")).strip(),
@@ -508,7 +552,10 @@ def upsert_parliamentarians(camara: str, items: List[Dict[str, Any]], source: st
     estimated_avg = _estimate_committee_avg(items)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            existing_by_external_id = _existing_parliamentarian_fields(cur, clean_camara)
             for item in items:
+                existing = existing_by_external_id.get(str(item.get("external_id", "")).strip())
+                item = _merge_existing_public_fields(item, existing)
                 params = {
                     "camara": clean_camara,
                     "external_id": str(item.get("external_id", "")).strip(),
@@ -643,8 +690,7 @@ def _name_richness(name: Any) -> Tuple[int, int]:
 
 
 def _is_missing_public_value(value: Any) -> bool:
-    text = str(value or "").strip().lower()
-    return text in {"", "sin dato", "none", "null"}
+    return _is_missing_public_text(value)
 
 
 def _is_broken_legacy_row(row: Dict[str, Any]) -> bool:
