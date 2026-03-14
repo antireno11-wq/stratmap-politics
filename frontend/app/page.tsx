@@ -11,11 +11,12 @@ type SortBy =
   | "distrito"
   | "region"
   | "asistencia"
+  | "votaciones"
   | "sesiones";
 type SortOrder = "asc" | "desc";
 
 function isSortBy(value: string): value is SortBy {
-  return ["score", "nombre", "camara", "partido", "distrito", "region", "asistencia", "sesiones"].includes(value);
+  return ["score", "nombre", "camara", "partido", "distrito", "region", "asistencia", "votaciones", "sesiones"].includes(value);
 }
 
 function isSortOrder(value: string): value is SortOrder {
@@ -66,6 +67,7 @@ function sortRows(rows: any[], sortBy: SortBy, sortOrder: SortOrder) {
     if (sortBy === "distrito") result = compareText(a.distrito_circunscripcion, b.distrito_circunscripcion);
     if (sortBy === "region") result = compareText(a.region, b.region);
     if (sortBy === "asistencia") result = compareNullableNumber(a.asistencia_pct, b.asistencia_pct);
+    if (sortBy === "votaciones") result = compareNullableNumber(a.voting_participation_pct, b.voting_participation_pct);
     if (sortBy === "sesiones") result = compareNullableNumber(a.sesiones_totales, b.sesiones_totales);
 
     if (result === 0) {
@@ -162,6 +164,7 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
             <option value="distrito">Distrito/Circunscripción</option>
             <option value="region">Región</option>
             <option value="asistencia">Asistencia</option>
+            <option value="votaciones">Votaciones</option>
             <option value="sesiones">Sesiones</option>
           </select>
           <select name="sort_order" defaultValue={sortOrder}>
@@ -200,6 +203,7 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
                 <th>Distrito/Circunscripción</th>
                 <th>Región</th>
                 <th>Asistencia %</th>
+                <th>Votaciones %</th>
                 <th>Sesiones</th>
               </tr>
             </thead>
@@ -215,6 +219,7 @@ export default async function Home({ searchParams }: { searchParams: Record<stri
                   <td>{row.distrito_circunscripcion}</td>
                   <td>{row.region}</td>
                   <td>{row.asistencia_pct == null ? "N/D" : Number(row.asistencia_pct).toFixed(2)}</td>
+                  <td>{row.voting_participation_pct == null ? "N/D" : Number(row.voting_participation_pct).toFixed(2)}</td>
                   <td>
                     {row.sesiones_totales == null || row.sesiones_ausentes == null
                       ? "N/D"
