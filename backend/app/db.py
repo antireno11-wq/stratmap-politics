@@ -461,7 +461,7 @@ def list_parliamentarians(
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {"limit": max(1, min(int(limit), 1000))}
-    where: List[str] = ["COALESCE(p.source, '') <> 'legacy_diputados'"]
+    where: List[str] = []
 
     if camara:
         where.append("p.camara = %(camara)s")
@@ -519,6 +519,7 @@ def list_parliamentarians(
             rows = cur.fetchall()
 
     out = [dict(r) for r in rows]
+    out = [row for row in out if not _is_broken_legacy_row(row)]
 
     if unique_people and not camara:
         out = _dedup_by_current_role(out)
@@ -542,6 +543,30 @@ def _name_richness(name: Any) -> Tuple[int, int]:
         return (0, 0)
     tokens = [token for token in text.split() if token]
     return (len(tokens), len(text))
+
+
+def _is_missing_public_value(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text in {"", "sin dato", "none", "null"}
+
+
+def _is_broken_legacy_row(row: Dict[str, Any]) -> bool:
+    if str(row.get("source") or "").strip().lower() != "legacy_diputados":
+        return False
+    token_count, _ = _name_richness(row.get("nombre"))
+    if token_count >= 2:
+        return False
+    has_any_public_data = any(
+        [
+            row.get("asistencia_pct") is not None,
+            row.get("sesiones_totales") is not None,
+            row.get("committee_score") is not None,
+            not _is_missing_public_value(row.get("partido")),
+            not _is_missing_public_value(row.get("region")),
+            not _is_missing_public_value(row.get("distrito_circunscripcion")),
+        ]
+    )
+    return not has_any_public_data
 
 
 def _current_role_rank(row: Dict[str, Any]) -> Tuple[float, int, int, int, int, float]:
@@ -640,17 +665,20 @@ def get_parliamentarian(parliamentarian_id: int) -> Optional[Dict[str, Any]]:
 
 def count_by_camara() -> Dict[str, int]:
     sql = """
-    SELECT camara, COUNT(*)::int AS total
-    FROM parlamentarios
-    WHERE COALESCE(source, '') <> 'legacy_diputados'
-    GROUP BY camara;
+    SELECT camara, nombre, partido, distrito_circunscripcion, region,
+           asistencia_pct::float AS asistencia_pct, sesiones_totales,
+           committee_score::float AS committee_score, source
+    FROM parlamentarios;
     """
     out = {"DIPUTADO": 0, "SENADOR": 0}
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
             for row in cur.fetchall():
-                out[row["camara"]] = row["total"]
+                record = dict(row)
+                if _is_broken_legacy_row(record):
+                    continue
+                out[str(record.get("camara") or "")] = out.get(str(record.get("camara") or ""), 0) + 1
     return out
 
 
